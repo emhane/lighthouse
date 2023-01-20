@@ -727,6 +727,10 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                     let key = get_key_for_col(DBColumn::ExecPayload.into(), block_root.as_bytes());
                     key_value_batch.push(KeyValueStoreOp::DeleteKey(key));
                 }
+
+                StoreOp::KVStoreOpWrapper(kv_store_op) => {
+                    key_value_batch.push(kv_store_op);
+                }
             }
         }
         Ok(key_value_batch)
@@ -758,6 +762,8 @@ impl<E: EthSpec, Hot: ItemStore<E>, Cold: ItemStore<E>> HotColdDB<E, Hot, Cold> 
                 StoreOp::DeleteState(_, _) => (),
 
                 StoreOp::DeleteExecutionPayload(_) => (),
+
+                StoreOp::KVStoreOpWrapper(_) => (),
             }
         }
 

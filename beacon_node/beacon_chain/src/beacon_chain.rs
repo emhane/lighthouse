@@ -2714,11 +2714,14 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // is so we don't have to think about lock ordering with respect to the fork choice lock.
         // There are a bunch of places where we lock both fork choice and the pubkey cache and it
         // would be difficult to check that they all lock fork choice first.
-        let mut kv_store_ops = self
+        let mut store_ops = self
             .validator_pubkey_cache
             .try_write_for(VALIDATOR_PUBKEY_CACHE_LOCK_TIMEOUT)
             .ok_or(Error::ValidatorPubkeyCacheLockTimeout)?
-            .import_new_pubkeys(&state)?;
+            .import_new_pubkeys(&state)?
+            .into_iter()
+            .map(StoreOp::KVStoreOpWrapper)
+            .collect::<Vec<StoreOp<T::EthSpec>>>();
 
         // Apply the state to the attester cache, only if it is from the previous epoch or later.
         //
@@ -2841,17 +2844,16 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // If the write fails, revert fork choice to the version from disk, else we can
         // end up with blocks in fork choice that are missing from disk.
         // See https://github.com/sigp/lighthouse/issues/2028
-        let mut ops: Vec<_> = confirmed_state_roots
-            .into_iter()
-            .map(StoreOp::DeleteStateTemporaryFlag)
-            .collect();
-        ops.push(StoreOp::PutBlock(block_root, signed_block.clone()));
-        ops.push(StoreOp::PutState(block.state_root(), &state));
+        store_ops.extend(
+            confirmed_state_roots
+                .into_iter()
+                .map(StoreOp::DeleteStateTemporaryFlag),
+        );
+        store_ops.push(StoreOp::PutBlock(block_root, signed_block.clone()));
+        store_ops.push(StoreOp::PutState(block.state_root(), &state));
         let txn_lock = self.store.hot_db.begin_rw_transaction();
 
-        kv_store_ops.extend(self.store.convert_to_kv_batch(ops)?);
-
-        if let Err(e) = self.store.hot_db.do_atomically(kv_store_ops) {
+        if let Err(e) = self.store.do_atomically(store_ops) {
             error!(
                 self.log,
                 "Database write failed!";
