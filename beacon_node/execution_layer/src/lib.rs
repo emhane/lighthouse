@@ -35,13 +35,14 @@ use tokio::{
     time::sleep,
 };
 use tokio_stream::wrappers::WatchStream;
-use types::{AbstractExecPayload, BeaconStateError, Blob, ExecPayload, KzgCommitment};
+use types::{
+    blobs_sidecar::{Blobs, KzgCommitments},
+    ExecutionPayload, ExecutionPayloadCapella, ExecutionPayloadEip4844, ExecutionPayloadMerge,
+};
+use types::{AbstractExecPayload, BeaconStateError, ExecPayload};
 use types::{
     BlindedPayload, BlockType, ChainSpec, Epoch, ExecutionBlockHash, ForkName,
     ProposerPreparationData, PublicKeyBytes, Signature, SignedBeaconBlock, Slot, Uint256,
-};
-use types::{
-    ExecutionPayload, ExecutionPayloadCapella, ExecutionPayloadEip4844, ExecutionPayloadMerge,
 };
 
 mod block_hash;
@@ -121,26 +122,39 @@ pub enum BlockProposalContents<T: EthSpec, Payload: AbstractExecPayload<T>> {
     Payload(Payload),
     PayloadAndBlobs {
         payload: Payload,
-        kzg_commitments: VariableList<KzgCommitment, T::MaxBlobsPerBlock>,
-        blobs: VariableList<Blob<T>, T::MaxBlobsPerBlock>,
+        kzg_commitments: KzgCommitments<T>,
+        blobs: Blobs<T>,
     },
 }
 
+pub struct BlockProposalBlobsContents<T: EthSpec> {
+    pub kzg_commitments: KzgCommitments<T>,
+    pub blobs: Blobs<T>,
+}
+
+pub struct BlockProposalContentsDeconstructed<T: EthSpec, Payload: AbstractExecPayload<T>> {
+    pub payload: Payload,
+    pub blobs_content: Option<BlockProposalBlobsContents<T>>,
+}
+
 impl<T: EthSpec, Payload: AbstractExecPayload<T>> BlockProposalContents<T, Payload> {
-    pub fn deconstruct(
-        self,
-    ) -> (
-        Payload,
-        Option<VariableList<KzgCommitment, T::MaxBlobsPerBlock>>,
-        Option<VariableList<Blob<T>, T::MaxBlobsPerBlock>>,
-    ) {
+    pub fn deconstruct(self) -> BlockProposalContentsDeconstructed<T, Payload> {
         match self {
-            Self::Payload(payload) => (payload, None, None),
+            Self::Payload(payload) => BlockProposalContentsDeconstructed {
+                payload,
+                blobs_content: None,
+            },
             Self::PayloadAndBlobs {
                 payload,
                 kzg_commitments,
                 blobs,
-            } => (payload, Some(kzg_commitments), Some(blobs)),
+            } => BlockProposalContentsDeconstructed {
+                payload,
+                blobs_content: Some(BlockProposalBlobsContents {
+                    kzg_commitments,
+                    blobs,
+                }),
+            },
         }
     }
 
@@ -322,13 +336,9 @@ impl<T: EthSpec> ExecutionLayer<T> {
         let engine: Engine = {
             let auth = Auth::new(jwt_key, jwt_id, jwt_version);
             debug!(log, "Loaded execution endpoint"; "endpoint" => %execution_url, "jwt_path" => ?secret_file.as_path());
-            let api = HttpJsonRpc::new_with_auth(
-                execution_url,
-                auth,
-                execution_timeout_multiplier,
-                &spec,
-            )
-            .map_err(Error::ApiError)?;
+            let api =
+                HttpJsonRpc::new_with_auth(execution_url, auth, execution_timeout_multiplier, spec)
+                    .map_err(Error::ApiError)?;
             Engine::new(api, executor.clone(), &log)
         };
 

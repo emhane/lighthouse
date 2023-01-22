@@ -35,6 +35,7 @@ impl From<SignedBeaconBlockHash> for Hash256 {
     }
 }
 
+#[derive(Debug)]
 pub enum BlobReconstructionError {
     BlobsMissing,
 }
@@ -253,11 +254,11 @@ impl<E: EthSpec, Payload: AbstractExecPayload<E>> SignedBeaconBlock<E, Payload> 
             .body()
             .blob_kzg_commitments()
             .map(|kzg_commitments| {
-                if kzg_commitments.len() > 0 {
+                if !kzg_commitments.is_empty() {
                     Err(BlobReconstructionError::BlobsMissing)
                 } else {
                     Ok(Some(BlobsSidecar::empty_from_parts(
-                        block_root_opt.unwrap_or(self.canonical_root()),
+                        block_root_opt.unwrap_or_else(|| self.canonical_root()),
                         self.slot(),
                     )))
                 }

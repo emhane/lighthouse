@@ -35,8 +35,8 @@ impl<T: EthSpec> SignedBeaconBlockAndBlobsSidecar<T> {
 }
 
 /// A wrapper over a [`SignedBeaconBlock`] or a [`SignedBeaconBlockAndBlobsSidecar`]. This newtype
-/// wraps the `BlockWrapperInner` to ensure blobs cannot be accessed via an enum match. This would
-/// circumvent empty blob reconstruction when accessing blobs.
+/// wraps the [`BlockWrapperInner`] to ensure blobs cannot be accessed via an enum match. This
+/// would circumvent empty blob reconstruction when accessing blobs.
 #[derive(Clone, Debug, Derivative)]
 #[derivative(PartialEq, Hash(bound = "T: EthSpec"))]
 pub struct BlockWrapper<T: EthSpec>(BlockWrapperInner<T>);
@@ -48,6 +48,9 @@ pub enum BlockWrapperInner<T: EthSpec> {
     Block(Arc<SignedBeaconBlock<T>>),
     BlockAndBlob(SignedBeaconBlockAndBlobsSidecar<T>),
 }
+
+pub type BlockWrapperInnerDeconstructed<T> =
+    (Arc<SignedBeaconBlock<T>>, Option<Arc<BlobsSidecar<T>>>);
 
 impl<T: EthSpec> BlockWrapper<T> {
     pub fn new(block: Arc<SignedBeaconBlock<T>>) -> Self {
@@ -76,7 +79,7 @@ impl<T: EthSpec> BlockWrapper<T> {
     }
     pub fn block(&self) -> &SignedBeaconBlock<T> {
         match &self.0 {
-            BlockWrapperInner::Block(block) => &block,
+            BlockWrapperInner::Block(block) => block,
             BlockWrapperInner::BlockAndBlob(block_sidecar_pair) => &block_sidecar_pair.beacon_block,
         }
     }
@@ -119,23 +122,18 @@ impl<T: EthSpec> BlockWrapper<T> {
     pub fn deconstruct(
         self,
         block_root: Option<Hash256>,
-    ) -> (
-        Arc<SignedBeaconBlock<T>>,
-        Result<Option<Arc<BlobsSidecar<T>>>, BlobReconstructionError>,
-    ) {
+    ) -> Result<BlockWrapperInnerDeconstructed<T>, BlobReconstructionError> {
         match self.0 {
             BlockWrapperInner::Block(block) => {
-                let blobs = block
-                    .reconstruct_empty_blobs(block_root)
-                    .map(|blob_opt| blob_opt.map(Arc::new));
-                (block, blobs)
+                let blobs = block.reconstruct_empty_blobs(block_root)?.map(Arc::new);
+                Ok((block, blobs))
             }
             BlockWrapperInner::BlockAndBlob(block_sidecar_pair) => {
                 let SignedBeaconBlockAndBlobsSidecar {
                     beacon_block,
                     blobs_sidecar,
                 } = block_sidecar_pair;
-                (beacon_block, Ok(Some(blobs_sidecar)))
+                Ok((beacon_block, Some(blobs_sidecar)))
             }
         }
     }

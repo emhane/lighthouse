@@ -69,7 +69,7 @@ impl<E: EthSpec> EarlyAttesterCache<E> {
             },
         };
 
-        let (block, blobs) = block.deconstruct(Some(beacon_block_root));
+        let (block, blobs) = block.deconstruct(Some(beacon_block_root))?;
         let item = CacheItem {
             epoch,
             committee_lengths,
@@ -77,7 +77,7 @@ impl<E: EthSpec> EarlyAttesterCache<E> {
             source,
             target,
             block,
-            blobs: blobs.map_err(|_| Error::MissingBlobs)?,
+            blobs,
             proto_block,
         };
 
@@ -165,8 +165,7 @@ impl<E: EthSpec> EarlyAttesterCache<E> {
             .read()
             .as_ref()
             .filter(|item| item.beacon_block_root == block_root)
-            .map(|item| item.blobs.clone())
-            .flatten()
+            .and_then(|item| item.blobs.clone())
     }
 
     /// Returns the proto-array block, if `block_root` matches the cached item.

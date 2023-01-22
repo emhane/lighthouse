@@ -107,7 +107,6 @@ use tree_hash::TreeHash;
 use types::beacon_state::CloneConfig;
 use types::consts::eip4844::MIN_EPOCHS_FOR_BLOBS_SIDECARS_REQUESTS;
 use types::consts::merge::INTERVALS_PER_SLOT;
-use types::signed_block_and_blobs::BlockWrapper;
 use types::*;
 
 pub type ForkChoiceError = fork_choice::Error<crate::ForkChoiceStoreError>;
@@ -1057,7 +1056,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 if let Ok(Some(block)) = self.get_blinded_block(block_root) {
                     let expected_kzg_commitments = block.message().body().blob_kzg_commitments()?;
 
-                    if expected_kzg_commitments.len() > 0 {
+                    if !expected_kzg_commitments.is_empty() {
                         Err(Error::DBInconsistent(format!(
                             "Expected kzg commitments but no blobs stored for block root {}",
                             block_root
@@ -2940,7 +2939,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // If the write fails, revert fork choice to the version from disk, else we can
         // end up with blocks in fork choice that are missing from disk.
         // See https://github.com/sigp/lighthouse/issues/2028
-        let (signed_block, blobs) = signed_block.deconstruct(Some(block_root));
+        let (signed_block, blobs) = signed_block.deconstruct(Some(block_root))?;
         let block = signed_block.message();
         let mut ops: Vec<_> = confirmed_state_roots
             .into_iter()
@@ -2949,8 +2948,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         ops.push(StoreOp::PutBlock(block_root, signed_block.clone()));
         ops.push(StoreOp::PutState(block.state_root(), &state));
 
-        if let Some(blobs) = blobs? {
-            if blobs.blobs.len() > 0 {
+        if let Some(blobs) = blobs {
+            if !blobs.blobs.is_empty() {
                 //FIXME(sean) using this for debugging for now
                 info!(self.log, "Writing blobs to store"; "block_root" => ?block_root);
                 ops.push(StoreOp::PutBlobs(block_root, blobs));
@@ -4449,7 +4448,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 None,
             ),
             BeaconState::Merge(_) => {
-                let (payload, _, _) = block_contents
+                let block_contents = block_contents
                     .ok_or(BlockProductionError::MissingExecutionPayload)?
                     .deconstruct();
                 (
@@ -4469,7 +4468,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                             voluntary_exits: voluntary_exits.into(),
                             sync_aggregate: sync_aggregate
                                 .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                            execution_payload: payload
+                            execution_payload: block_contents
+                                .payload
                                 .try_into()
                                 .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
                         },
@@ -4478,7 +4478,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 )
             }
             BeaconState::Capella(_) => {
-                let (payload, _, _) = block_contents
+                let block_contents = block_contents
                     .ok_or(BlockProductionError::MissingExecutionPayload)?
                     .deconstruct();
 
@@ -4499,7 +4499,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                             voluntary_exits: voluntary_exits.into(),
                             sync_aggregate: sync_aggregate
                                 .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                            execution_payload: payload
+                            execution_payload: block_contents
+                                .payload
                                 .try_into()
                                 .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
                             bls_to_execution_changes: bls_to_execution_changes.into(),
@@ -4509,9 +4510,21 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 )
             }
             BeaconState::Eip4844(_) => {
-                let (payload, kzg_commitments, blobs) = block_contents
+                let block_contents_unpacked = block_contents
                     .ok_or(BlockProductionError::MissingExecutionPayload)?
                     .deconstruct();
+
+                let (blob_kzg_commitments, blobs) = match block_contents_unpacked.blobs_content {
+                    Some(blobs_content) => {
+                        let kzg_commitments: KzgCommitments<T::EthSpec> =
+                            blobs_content.kzg_commitments;
+                        let blobs: Blobs<T::EthSpec> = blobs_content.blobs;
+                        (kzg_commitments, blobs)
+                    }
+                    None => {
+                        return Err(BlockProductionError::InvalidPayloadFork);
+                    }
+                };
 
                 (
                     BeaconBlock::Eip4844(BeaconBlockEip4844 {
@@ -4530,15 +4543,15 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                             voluntary_exits: voluntary_exits.into(),
                             sync_aggregate: sync_aggregate
                                 .ok_or(BlockProductionError::MissingSyncAggregate)?,
-                            execution_payload: payload
+                            execution_payload: block_contents_unpacked
+                                .payload
                                 .try_into()
                                 .map_err(|_| BlockProductionError::InvalidPayloadFork)?,
                             bls_to_execution_changes: bls_to_execution_changes.into(),
-                            blob_kzg_commitments: kzg_commitments
-                                .ok_or(BlockProductionError::InvalidPayloadFork)?,
+                            blob_kzg_commitments,
                         },
                     }),
-                    blobs,
+                    Some(blobs),
                 )
             }
         };
@@ -4553,7 +4566,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         debug!(
             self.log,
             "Produced block on state";
-            "block_size" => block_size,
+            "block_size" => %block_size,
         );
 
         metrics::observe(&metrics::BLOCK_SIZE, block_size as f64);
@@ -4600,8 +4613,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 return Err(BlockProductionError::TrustedSetupNotInitialized);
             };
             let kzg_aggregated_proof =
-                kzg_utils::compute_aggregate_kzg_proof::<T::EthSpec>(&kzg, &blobs)
-                    .map_err(|e| BlockProductionError::KzgError(e))?;
+                kzg_utils::compute_aggregate_kzg_proof::<T::EthSpec>(kzg, &blobs)
+                    .map_err(BlockProductionError::KzgError)?;
             let beacon_block_root = block.canonical_root();
             let expected_kzg_commitments = block.body().blob_kzg_commitments().map_err(|_| {
                 BlockProductionError::InvalidBlockVariant(
@@ -4615,7 +4628,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 kzg_aggregated_proof,
             };
             kzg_utils::validate_blobs_sidecar(
-                &kzg,
+                kzg,
                 slot,
                 beacon_block_root,
                 expected_kzg_commitments,
@@ -5847,17 +5860,14 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// The epoch at which we require a data availability check in block processing.
     /// `None` if the `Eip4844` fork is disabled.
     pub fn data_availability_boundary(&self) -> Option<Epoch> {
-        self.spec
-            .eip4844_fork_epoch
-            .map(|fork_epoch| {
-                self.epoch().ok().map(|current_epoch| {
-                    std::cmp::max(
-                        fork_epoch,
-                        current_epoch.saturating_sub(*MIN_EPOCHS_FOR_BLOBS_SIDECARS_REQUESTS),
-                    )
-                })
+        self.spec.eip4844_fork_epoch.and_then(|fork_epoch| {
+            self.epoch().ok().map(|current_epoch| {
+                std::cmp::max(
+                    fork_epoch,
+                    current_epoch.saturating_sub(*MIN_EPOCHS_FOR_BLOBS_SIDECARS_REQUESTS),
+                )
             })
-            .flatten()
+        })
     }
 
     /// Returns `true` if we are at or past the `Eip4844` fork. This will always return `false` if

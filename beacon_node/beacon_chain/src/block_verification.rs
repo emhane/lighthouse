@@ -1124,7 +1124,7 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for SignatureVerifiedBloc
     }
 
     fn block(&self) -> &SignedBeaconBlock<T::EthSpec> {
-        &self.block.block()
+        self.block.block()
     }
 }
 
@@ -1583,18 +1583,17 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
                     .body()
                     .blob_kzg_commitments()
                     .map_err(|_| BlockError::BlobValidation(BlobError::KzgCommitmentMissing))?;
-                if !consensus_context.blobs_sidecar_validated() {
-                    if !kzg_utils::validate_blobs_sidecar(
-                        &kzg,
+                if !consensus_context.blobs_sidecar_validated()
+                    && !kzg_utils::validate_blobs_sidecar(
+                        kzg,
                         block.slot(),
                         block_root,
                         kzg_commitments,
                         &sidecar,
                     )
                     .map_err(|e| BlockError::BlobValidation(BlobError::KzgError(e)))?
-                    {
-                        return Err(BlockError::BlobValidation(BlobError::InvalidKzgProof));
-                    }
+                {
+                    return Err(BlockError::BlobValidation(BlobError::InvalidKzgProof));
                 }
                 if !consensus_context.blobs_verified_vs_txs()
                     && verify_kzg_commitments_against_transactions::<T::EthSpec>(
