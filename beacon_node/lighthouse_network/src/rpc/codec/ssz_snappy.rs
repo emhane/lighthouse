@@ -1307,7 +1307,7 @@ mod tests {
 
         // Removing context bytes for v2 messages should error
         let mut encoded_bytes = encode_response(
-            Protocol::BlocksByRange,
+            Protocol::BlobsByRange,
             Version::V2,
             RPCCodedResponse::Success(RPCResponse::BlocksByRange(Arc::new(empty_base_block()))),
             ForkName::Base,
@@ -1318,7 +1318,7 @@ mod tests {
 
         assert!(matches!(
             decode_response(
-                Protocol::BlocksByRange,
+                Protocol::BlobsByRange,
                 Version::V2,
                 &mut encoded_bytes,
                 ForkName::Base
@@ -1328,7 +1328,7 @@ mod tests {
         ));
 
         let mut encoded_bytes = encode_response(
-            Protocol::BlocksByRoot,
+            Protocol::BlobsByRoot,
             Version::V2,
             RPCCodedResponse::Success(RPCResponse::BlocksByRoot(Arc::new(empty_base_block()))),
             ForkName::Base,
@@ -1339,7 +1339,7 @@ mod tests {
 
         assert!(matches!(
             decode_response(
-                Protocol::BlocksByRange,
+                Protocol::BlobsByRoot,
                 Version::V2,
                 &mut encoded_bytes,
                 ForkName::Base
