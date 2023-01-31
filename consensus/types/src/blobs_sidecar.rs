@@ -33,8 +33,6 @@ pub struct BlobsSidecar<T: EthSpec> {
     pub kzg_aggregated_proof: KzgProof,
 }
 
-impl<T: EthSpec> SignedRoot for BlobsSidecar<T> {}
-
 impl<T: EthSpec> BlobsSidecar<T> {
     pub fn empty() -> Self {
         Self::default()

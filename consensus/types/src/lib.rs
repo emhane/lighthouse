@@ -99,6 +99,7 @@ pub mod slot_data;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
+pub mod blob_sidecar;
 pub mod blobs_sidecar;
 pub mod signed_block_and_blobs;
 
