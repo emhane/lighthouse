@@ -47,7 +47,7 @@
 //!
 //! ```
 use crate::blob_verification::{
-    validate_blob_for_gossip, AsBlock, AvailableBlock, BlobError, BlockWrapper, IntoAvailableBlock,
+    validate_blob_for_gossip, AsBlock, AvailabilityPendingBlock, BlobError, BlockWrapper, IntoAvailableBlock,
     IntoBlockWrapper,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
@@ -632,7 +632,7 @@ pub fn signature_verify_chain_segment<T: BeaconChainTypes>(
 #[derive(Derivative)]
 #[derivative(Debug(bound = "T: BeaconChainTypes"))]
 pub struct GossipVerifiedBlock<T: BeaconChainTypes> {
-    pub block: AvailableBlock<T::EthSpec>,
+    pub block: AvailabilityPendingBlock<T::EthSpec>,
     pub block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
@@ -641,7 +641,7 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes> {
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
 pub struct SignatureVerifiedBlock<T: BeaconChainTypes> {
-    block: AvailableBlock<T::EthSpec>,
+    block: AvailabilityPendingBlock<T::EthSpec>,
     block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
@@ -663,8 +663,8 @@ type PayloadVerificationHandle<E> =
 /// Note: a `ExecutionPendingBlock` is not _forever_ valid to be imported, it may later become invalid
 /// due to finality or some other event. A `ExecutionPendingBlock` should be imported into the
 /// `BeaconChain` immediately after it is instantiated.
-pub struct ExecutionPendingBlock<T: BeaconChainTypes> {
-    pub block: AvailableBlock<T::EthSpec>,
+pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: IntoAvailablBlock> {
+    pub block: B,
     pub block_root: Hash256,
     pub state: BeaconState<T::EthSpec>,
     pub parent_block: SignedBeaconBlock<T::EthSpec, BlindedPayload<T::EthSpec>>,
@@ -973,7 +973,7 @@ impl<T: BeaconChainTypes> SignatureVerifiedBlock<T> {
     ///
     /// Returns an error if the block is invalid, or if the block was unable to be verified.
     pub fn new(
-        block: AvailableBlock<T::EthSpec>,
+        block: AvailabilityPendingBlock<T::EthSpec>,
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> Result<Self, BlockError<T::EthSpec>> {
@@ -1023,7 +1023,7 @@ impl<T: BeaconChainTypes> SignatureVerifiedBlock<T> {
 
     /// As for `new` above but producing `BlockSlashInfo`.
     pub fn check_slashable(
-        block: AvailableBlock<T::EthSpec>,
+        block: AvailabilityPendingBlock<T::EthSpec>,
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> Result<Self, BlockSlashInfo<BlockError<T::EthSpec>>> {
@@ -1146,7 +1146,7 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for Arc<SignedBeaconBlock
     }
 }
 
-impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for AvailableBlock<T::EthSpec> {
+impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for AvailabilityPendingBlock<T::EthSpec> {
     /// Verifies the `SignedBeaconBlock` by first transforming it into a `SignatureVerifiedBlock`
     /// and then using that implementation of `IntoExecutionPendingBlock` to complete verification.
     fn into_execution_pending_block_slashable(
@@ -1177,7 +1177,7 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
     ///
     /// Returns an error if the block is invalid, or if the block was unable to be verified.
     pub fn from_signature_verified_components(
-        block: AvailableBlock<T::EthSpec>,
+        block: AvailabilityPendingBlock<T::EthSpec>,
         block_root: Hash256,
         parent: PreProcessingSnapshot<T::EthSpec>,
         mut consensus_context: ConsensusContext<T::EthSpec>,
