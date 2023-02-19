@@ -6,7 +6,6 @@ use kzg::KzgProof;
 use serde_derive::{Deserialize, Serialize};
 use ssz::Encode;
 use ssz_derive::{Decode, Encode};
-use ssz_types::VariableList;
 use test_random_derive::TestRandom;
 use tree_hash_derive::TreeHash;
 
@@ -57,7 +56,6 @@ impl<T: EthSpec> BlobSidecar<T> {
     Encode,
     Decode,
     TreeHash,
-    Default,
     TestRandom,
     Derivative,
     arbitrary::Arbitrary,
@@ -66,7 +64,7 @@ impl<T: EthSpec> BlobSidecar<T> {
 #[arbitrary(bound = "T: EthSpec")]
 #[derivative(PartialEq, Hash(bound = "T: EthSpec"))]
 pub struct SignedBlobSidecar<T: EthSpec> {
-    pub message: BlobsSidecar<T>,
+    pub message: BlobSidecar<T>,
     pub signature: Signature,
 }
 

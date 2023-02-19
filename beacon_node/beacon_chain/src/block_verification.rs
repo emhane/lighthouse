@@ -45,7 +45,7 @@
 //! ```
 use crate::blob_verification::{
     validate_blob_for_gossip, AsBlock, AvailabilityPendingBlock, AvailableBlock, BlobError,
-    BlockWrapper, IntoAvailableBlock, IntoBlockWrapper,
+    BlockWrapper, IntoAvailablilityPendingBlock, IntoBlockWrapper,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
 use crate::execution_payload::{
@@ -679,7 +679,7 @@ pub struct ExecutionPendingBlock<
 /// Used to allow functions to accept blocks at various stages of verification.
 pub trait IntoExecutionPendingBlock<
     T: BeaconChainTypes,
-    B: IntoAvailableBlock = AvailableBlock<T::EthSpec>,
+    B: IntoAvailablilityPendingBlock = AvailableBlock<T::EthSpec>,
 >: Sized
 {
     fn into_execution_pending_block(
