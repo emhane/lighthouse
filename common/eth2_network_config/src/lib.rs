@@ -367,6 +367,7 @@ mod tests {
             boot_enr,
             genesis_state_bytes: genesis_state.as_ref().map(Encode::as_ssz_bytes),
             config,
+            kzg_trusted_setup: None,
         };
 
         testnet

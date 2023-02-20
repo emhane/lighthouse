@@ -646,6 +646,59 @@ impl<T: BeaconChainTypes> Worker<T> {
         }
     }
 
+    pub async fn process_gossip_unverified_blob(
+        &self,
+        message_id: MessageId,
+        peer_id: PeerId,
+        peer_client: Client,
+        blob: BlobWrapper<T::EthSpec>,
+        reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
+        seen_duration: Duration,
+    ) -> Option<GossipVerifiedBlob<T>> {
+        let Some(entry) = self.chain.blobs_pending_availability_cache.get(blob.block_root()) else {
+            return None
+        };
+        // A blob at this index already exits, don't propagate blob, as according to spec.
+        if entry
+            .blobs
+            .iter()
+            .find(|cache_blob| cached_blob.index() == blob.index())
+        {
+            return None;
+        }
+        Some(GossipVerifiedBlob {})
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_gossip_blob(
+        self,
+        message_id: MessageId,
+        peer_id: PeerId,
+        peer_client: Client,
+        block: BlobWrapper<T::EthSpec>,
+        reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
+        duplicate_cache: DuplicateCache,
+        seen_duration: Duration,
+    ) {
+        if let Some(gossip_verified_blob) = self
+            .process_gossip_unverified_blob(
+                message_id,
+                peer_id,
+                peer_client,
+                block,
+                reprocess_tx.clone(),
+                seen_duration,
+            )
+            .await
+        {
+            let block_root = gossip_verified_block.block_root;
+
+            self.chain
+                .blobs_pending_availability_cache
+                .insert_gossip_verified_blob(block_root, gossip_verified_blob);
+        }
+    }
+
     /// Process the beacon block received from the gossip network and:
     ///
     /// - If it passes gossip propagation criteria, tell the network thread to forward it.

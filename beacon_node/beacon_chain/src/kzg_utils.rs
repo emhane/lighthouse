@@ -13,7 +13,7 @@ pub fn validate_blobs_sidecar<T: EthSpec>(
     slot: Slot,
     beacon_block_root: Hash256,
     expected_kzg_commitments: &[KzgCommitment],
-    blob_sidecars: Vec<BlobSidecar<T>>,
+    blob_sidecars: VariableList<BlobSidecar<T>, T::MaxBlobsPerBlock>,
 ) -> Result<bool, KzgError> {
     if slot != blob_sidecars.beacon_block_slot
         || beacon_block_root != blob_sidecars.beacon_block_root
