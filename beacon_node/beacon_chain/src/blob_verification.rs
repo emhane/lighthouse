@@ -216,6 +216,16 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
     ) -> AvailablilityPendingBlock<T::EthSpec>;
 }
 
+impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for AvailabilityPendingBlock<T::EthSpec> {
+    fn into_availablilty_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &BeaconChain<T>,
+    ) -> AvailablilityPendingBlock<T::EthSpec> {
+        self
+    }
+}
+
 impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for BlockWrapper<T::EthSpec> {
     fn into_availablilty_pending_block(
         self,
@@ -266,7 +276,7 @@ enum AvailableBlockInner<E: EthSpec> {
     /// The container for any block which requires a data availability check at time of
     /// construction.
     BlockAndBlobs(
-        AvailableBlockAndBlobs<E>,
+        Arc<SignedBeaconBlock<E>>,
         VariableList<SignedBlobSidecar<E>, E::MaxBlobsPerBlock>,
     ),
 }
