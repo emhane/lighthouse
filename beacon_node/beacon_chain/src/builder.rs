@@ -783,10 +783,7 @@ where
         let head_for_snapshot_cache = head_snapshot.clone();
         let canonical_head = CanonicalHead::new(fork_choice, Arc::new(head_snapshot));
 
-        let (rx_blocks, blocks_pending_availability_cache_handle) =
-            mpsc::channel::<ExecutedBlock<T::EthSpec>>();
-        let (rx_blob_groups, blob_groups_pending_availability_cache_handle) =
-            mpsc::channel::<ExecutedBlock<T::EthSpec>>();
+        let (rx, pending_availability_cache_tx) = mpsc::channel::<ExecutedBlock<T::EthSpec>>();
 
         let beacon_chain = BeaconChain {
             spec: self.spec,
@@ -857,8 +854,9 @@ where
             validator_monitor: RwLock::new(validator_monitor),
             blob_cache: BlobCache::default(),
             kzg,
-            blocks_pending_availability_cache_handle,
-            blobs_pending_handles: blob_groups_pending_availability_cache_handle,
+            pending_availability_cache_tx,
+            pending_blocks_rx: <_>::default(),
+            pending_blobs_tx: <_>::default(),
         };
 
         let head = beacon_chain.head_snapshot();
@@ -924,13 +922,13 @@ where
         let chain = beacon_chain.clone();
         beacon_chain.task_executor.spawn_without_exit(
             async move {
-                let pending_blocks = AvailabilityCache::<T::EthSpec>::default();
+                let pending_blocks = PendingAvailabilityCache::<T::EthSpec>::default();
                 loop {
                     tokio::select! {
-                        block = rx_blocks => {
+                        block = rx => {
                             pending_blocks.push(block);
                         }
-                        Some(Err(e)) = pending_blocks => {
+                        Some(Err(block, e)) = pending_blocks => {
                             // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
                         }
                         Some(Ok(block)) = pending_blocks => {

@@ -135,12 +135,10 @@ impl From<BeaconStateError> for BlobError {
 
 /// A wrapper around a [`SignedBlobSidecar`] that indicates it has been approved for re-gossiping
 /// on the p2p network.
-pub struct GossipVerifiedBlob<T: BeaconChainTypes> {
-    pub blob: Arc<SignedBlobSidecar<T::EthSpec>>,
-}
+pub struct GossipVerifiedBlob<T: BeaconChainTypes>(Arc<SignedBlobSidecar<T::EthSpec>>);
 
-pub fn validate_blob_for_gossip<T: BeaconChainTypes>(
-    blob: BlobWrapper<T::EthSpec>,
+pub fn validate_blob_for_gossip<T: BeaconChainTypes, Bs: AsBlobSidecar<E>>(
+    blob: Bs,
     block_root: Hash256,
     chain: &BeaconChain<T>,
 ) -> Result<GossipVerifiedBlob, BlobError> {
@@ -166,9 +164,9 @@ pub fn validate_blob_for_gossip<T: BeaconChainTypes>(
     GossipVerifiedBlob(blob)
 }
 
-fn verify_blobs<E: EthSpec, B: AsBlock<E>>(
+fn verify_blobs<E: EthSpec, B: AsBlock<E>, Bs: AsBlobSidecar<E>>(
     block: B,
-    blobs: SmallVec<[SignedBlobSidecar<E>; E::MaxBlobsPerBlock]>,
+    blobs: SmallVec<[Bs; E::MaxBlobsPerBlock]>,
     kzg: Option<&Kzg>,
 ) -> Result<(), BlobError> {
     let Some(kzg) = kzg else {
@@ -199,8 +197,8 @@ fn verify_blobs<E: EthSpec, B: AsBlock<E>>(
     )
 }
 
-fn verify_data_availability<T: EthSpec>(
-    blob_sidecars: VariableList<SignedBlobSideCar<T>, T::MaxBlobsPerBlock>,
+fn verify_data_availability<T: EthSpec, Bs: AsBlobSidecar<T>>(
+    blob_sidecars: SmallVec<[Bs; T::MaxBlobsPerBlock]>,
     kzg_commitments: &[KzgCommitment],
     transactions: &Transactions<T>,
     block_slot: Slot,
@@ -246,22 +244,32 @@ impl<E: EthSpec> From<Arc<SignedBeaconBlock<E>>> for BlockWrapper<E> {
 /// blocks around without consensus checks.
 #[derive(Clone, Debug, Derivative)]
 #[derivative(PartialEq, Hash(bound = "E: EthSpec"))]
-pub struct BlobWrapper<E: EthSpec>(Arc<SignedBlobSidecar<E>>);
 
 pub trait AsBlobSidecar<E: EthSpec> {
-    fn block_root(&self) -> Hash256;
+    fn beacon_block_root(&self) -> Hash256;
+    fn beacon_block_slot(&self) -> Slot;
+    fn proposer_index(&self) -> u64;
+    fn block_parent_root(&self) -> Hash256;
+    fn blob_index(&self) -> u64;
+    fn blob(&self) -> Blob<T>;
+    fn kzg_aggregated_proof(&self) -> KzgProof;
 }
 
-impl<E: EthSpec> AsBlobSidecar<E> for BlobWrapper<E> {
-    fn block_root(&self) -> Hash256 {
-        self.0.beacon_block_root()
-    }
+macro_rules! impl_as_blob_sidecar_fn_for_signed_sidecar {
+    ($fn_name: ident, $return_type: ident) => {
+        fn $fn_name -> $return_type {
+           self.message().$fn_name()
+        }
+    };
 }
-
-impl<E: EthSpec> From<Arc<SignedBlobSidecar<E>>> for BlobWrapper<E> {
-    fn from(blob: Arc<SignedBlobSidecar<E>>) -> Self {
-        BlobWrapper(blob)
-    }
+impl<E: EthSpec> AsBlobSidecar<E> for Arc<SignedBlobSidecar<E>> {
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(beacon_block_root, Hash256);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(beacon_block_slot, Slot);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(proposer_index, u64);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(block_parent_root, Hash256);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(blob_index, u64);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(blob, Blob<E>);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(kzg_aggregated_proof, KzgProof);
 }
 
 #[derive(Copy, Clone)]

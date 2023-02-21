@@ -1,5 +1,5 @@
 use crate::test_utils::TestRandom;
-use crate::{Blob, BlobsSidecar, EthSpec, Hash256, SignedRoot, Slot};
+use crate::{Blob, EthSpec, Hash256, SignedRoot, Slot};
 use bls::Signature;
 use derivative::Derivative;
 use kzg::KzgProof;

@@ -21,7 +21,7 @@ use store::hot_cold_store::HotColdDBError;
 use tokio::sync::mpsc;
 use types::{
     Attestation, AttesterSlashing, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate,
-    LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof,
+    LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock,
     SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit, Slot, SubnetId,
     SyncCommitteeMessage, SyncSubnetId,
 };
@@ -651,22 +651,23 @@ impl<T: BeaconChainTypes> Worker<T> {
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        blob: BlobWrapper<T::EthSpec>,
+        blob: SignedBlobSidecar<T::EthSpec>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
-    ) -> Option<GossipVerifiedBlob<T>> {
-        let Some(entry) = self.chain.blobs_pending_handles.get(blob.block_root()) else {
+    ) -> Result<GossipVerifiedBlob<T>, BlobError> {
+        let Some(entry) = self.chain.pending_blobs.get(blob.beacon_block_root()) else {
             return None
         };
-        // A blob at this index already exits, don't propagate blob, as according to spec.
+        // todo(emhane): A blob at this index already exits, don't propagate blob, as according to
+        // spec (if kzg-verified or also not kzg-verified?)
         if entry
             .blobs
             .iter()
-            .find(|cache_blob| cached_blob.index() == blob.index())
+            .find(|cache_blob| cached_blob.blob_index() == blob.blob_index())
         {
             return None;
         }
-        Some(GossipVerifiedBlob {})
+        Ok(GossipVerifiedBlob(blob))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -675,7 +676,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        block: BlobWrapper<T::EthSpec>,
+        block: SignedBeaconBlock<T::EthSpec>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,
@@ -696,7 +697,7 @@ impl<T: BeaconChainTypes> Worker<T> {
             let tx = match self.chain.pending_blobs_tx.get(block_root) {
                 Some(tx) => tx,
                 None => {
-                    let (tx, rx) = oneshot::channel::<Arc<SignedBlobSidecar<T::EthSpec>>>();
+                    let (tx, rx) = oneshot::channel::<GossipVerifiedBlob>();
                     self.chain.pending_blocks_rx.put(block_root, rx);
                     tx
                 }

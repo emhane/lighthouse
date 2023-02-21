@@ -446,12 +446,16 @@ pub struct BeaconChain<T: BeaconChainTypes> {
 pub struct PendingAvailabilityCache<T: EthSpec>(FuturesUnordered<ExecutedBlock<T>>);
 
 impl<T: EthSpec> Stream for PendingAvailabilityCache<T> {
-    type Item = ExecutedBlock<T>;
+    type Item = Result<ExecutedBlock<T>, BlobError>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.0.is_empty() {
             return Poll::Pending;
         }
-        self.0.poll_next()
+        let state = self.0.poll_next();
+        if let Poll::Ready(Err(e)) = state {
+            return Poll::Ready(Err(BlobError::DataAvailabilityFailed(self.clone(), e)));
+        }
+        state
     }
 }
 

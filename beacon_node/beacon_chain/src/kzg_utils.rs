@@ -1,6 +1,8 @@
 use kzg::{Error as KzgError, Kzg, BYTES_PER_BLOB};
 use types::{Blob, BlobsSidecar, EthSpec, Hash256, KzgCommitment, KzgProof, Slot};
 
+use crate::blob_verification::AsBlobSidecar;
+
 fn ssz_blob_to_crypto_blob<T: EthSpec>(blob: Blob<T>) -> kzg::Blob {
     let blob_vec: Vec<u8> = blob.into();
     let mut arr = [0; BYTES_PER_BLOB];
@@ -8,21 +10,25 @@ fn ssz_blob_to_crypto_blob<T: EthSpec>(blob: Blob<T>) -> kzg::Blob {
     arr.into()
 }
 
-pub fn validate_blob_sidecars<T: EthSpec>(
+pub fn validate_blob_sidecars<T: EthSpec, Bs: AsBlobSidecar<E>>(
     kzg: &Kzg,
     slot: Slot,
     beacon_block_root: Hash256,
     expected_kzg_commitments: &[KzgCommitment],
-    blob_sidecars: VariableList<BlobSidecar<T>, T::MaxBlobsPerBlock>,
+    blob_sidecars: VariableList<Bs, T::MaxBlobsPerBlock>,
 ) -> Result<bool, KzgError> {
-    if slot != blob_sidecars.beacon_block_slot
-        || beacon_block_root != blob_sidecars.beacon_block_root
-        || blob_sidecars.len() != expected_kzg_commitments.len()
-    {
+    if blob_sidecars.len() != expected_kzg_commitments.len() {
         return Ok(false);
     }
+    for blob_sidecar in blob_sidecars.iter() {
+        if slot != blob_sidecar.beacon_block_slot()
+            || beacon_block_root != blob_sidecar.beacon_block_root()
+        {
+            return Ok(false);
+        }
+    }
 
-    blobs.sort_by(|a, b| a.index().partial_cmp(b.index()).unwrap());
+    blobs.sort_by(|a, b| a.blob_index().partial_cmp(b.blob_index()).unwrap());
     let blobs = blob_sidecars
         .into_iter()
         .map(|blob| ssz_blob_to_crypto_blob::<T>(blob.blob.clone())) // TODO(pawan): avoid this clone
