@@ -161,7 +161,7 @@ pub fn validate_blob_for_gossip<T: BeaconChainTypes, Bs: AsBlobSidecar<E>>(
             block_slot: block.slot(),
         });
     }
-    GossipVerifiedBlob(blob)
+    Ok(GossipVerifiedBlob(blob))
 }
 
 fn verify_blobs<E: EthSpec, B: AsBlock<E>, Bs: AsBlobSidecar<E>>(

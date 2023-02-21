@@ -79,6 +79,7 @@ use futures::{
 };
 use itertools::process_results;
 use itertools::Itertools;
+use lru::LruCache;
 use operation_pool::{AttestationRef, OperationPool, PersistedOperationPool};
 use parking_lot::{Mutex, RwLock};
 use proto_array::{CountUnrealizedFull, DoNotReOrg, ProposerHeadError};
@@ -173,6 +174,11 @@ pub const INVALID_JUSTIFIED_PAYLOAD_SHUTDOWN_REASON: &str =
 
 pub const INVALID_FINALIZED_MERGE_TRANSITION_BLOCK_SHUTDOWN_REASON: &str =
     "Finalized merge transition block is invalid.";
+
+/// The number of channels to hold open at a time to send blobs arriving over the network to their
+/// blocks. Note that, when a block arrives it removes its receiver from the cache and then, if
+/// the block is successfully made available the matching sender is removed.
+pub const DEFAULT_PENDING_AVAILABILITY_CHANNELS: usize = 20;
 
 /// Defines the behaviour when a block/block-root for a skipped slot is requested.
 pub enum WhenSlotSkipped {
@@ -437,9 +443,9 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub kzg: Option<Arc<kzg::Kzg>>,
     pub pending_availability_cache_tx: Sender<ExecuteBlock<T::EthSpec>>,
     /// Borrow sender to send a blob that arrived over network.
-    pub pending_blobs_tx: HashMap<Hash256, Sender<Arc<SignedBlobSidecar<T::EthSpec>>>>,
+    pub pending_blobs_tx: LruCache<Hash256, Sender<Arc<SignedBlobSidecar<T::EthSpec>>>>,
     /// Remove sender to include in availability-pending block when block arrives over network.
-    pub pending_blocks_rx: HashMap<Hash256, Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>>,
+    pub pending_blocks_rx: LruCache<Hash256, Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>>,
 }
 
 #[derive(Default)]

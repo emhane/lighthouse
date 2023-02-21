@@ -1,4 +1,7 @@
-use crate::beacon_chain::{CanonicalHead, BEACON_CHAIN_DB_KEY, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY};
+use crate::beacon_chain::{
+    CanonicalHead, BEACON_CHAIN_DB_KEY, DEFAULT_PENDING_AVAILABILITY_CHANNELS, ETH1_CACHE_DB_KEY,
+    OP_POOL_DB_KE,
+};
 use crate::blob_cache::BlobCache;
 use crate::eth1_chain::{CachingEth1Backend, SszEth1};
 use crate::eth1_finalization_cache::Eth1FinalizationCache;
@@ -855,8 +858,8 @@ where
             blob_cache: BlobCache::default(),
             kzg,
             pending_availability_cache_tx,
-            pending_blocks_rx: <_>::default(),
-            pending_blobs_tx: <_>::default(),
+            pending_blocks_rx: LruCache::new(DEFAULT_PENDING_AVAILABILITY_CHANNELS),
+            pending_blobs_tx: LruCache::new(DEFAULT_PENDING_AVAILABILITY_CHANNELS),
         };
 
         let head = beacon_chain.head_snapshot();
@@ -932,15 +935,15 @@ where
                             // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
                         }
                         Some(Ok(block)) = pending_blocks => {
-                    chain.spawn_blocking_handle(
-                        move || {
-                            chain.import_block_from_pending_availability_cache(
-                                block
+                            chain.spawn_blocking_handle(
+                                move || {
+                                    chain.import_block_from_pending_availability_cache(
+                                        block
+                                    )
+                                },
+                                "import_block_from_peding_availability_cache_handle",
                             )
-                        },
-                        "import_block_from_peding_availability_cache_handle",
-                    )
-                    .await??;
+                            .await??;
                         }
                     }
                 }
