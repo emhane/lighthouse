@@ -45,7 +45,7 @@
 //! ```
 use crate::blob_verification::{
     validate_blob_for_gossip, AsBlock, AvailabilityPendingBlock, AvailableBlock, BlobError,
-    BlockWrapper, IntoAvailablilityPendingBlock, IntoBlockWrapper,
+    BlockWrapper, IntoAvailabilityPendingBlock, IntoBlockWrapper,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
 use crate::execution_payload::{

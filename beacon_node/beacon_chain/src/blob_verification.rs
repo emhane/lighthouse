@@ -323,6 +323,7 @@ impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T
         self
     }
 }
+
 pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> {
     /// Takes a receiver as param, on which the availability-pending block receives kzg-verified
     /// blobs.
