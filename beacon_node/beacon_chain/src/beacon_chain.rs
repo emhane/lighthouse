@@ -7,7 +7,9 @@ use crate::attester_cache::{AttesterCache, AttesterCacheKey};
 use crate::beacon_proposer_cache::compute_proposer_duties_from_head;
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
-use crate::blob_verification::{AsBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock};
+use crate::blob_verification::{
+    AsBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock, IntoAvailabilityPendingBlock,
+};
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
     check_block_is_finalized_descendant, check_block_relevancy, get_block_root,
@@ -2725,7 +2727,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     ///
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     /// verification.
-    pub async fn process_block<B: IntoAvailabilityPendingBlock<T>>(
+    pub async fn process_block<A: AsBlock<T>, B: IntoAvailabilityPendingBlock<T, A>>(
         self: &Arc<Self>,
         block_root: Hash256,
         unverified_block: B,

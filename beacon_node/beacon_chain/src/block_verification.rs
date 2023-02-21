@@ -628,8 +628,8 @@ pub fn signature_verify_chain_segment<T: BeaconChainTypes>(
 /// the p2p network.
 #[derive(Derivative)]
 #[derivative(Debug(bound = "T: BeaconChainTypes"))]
-pub struct GossipVerifiedBlock<T: BeaconChainTypes> {
-    pub block: AvailabilityPendingBlock<T::EthSpec>,
+pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> {
+    pub block: B,
     pub block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
@@ -637,7 +637,7 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes> {
 
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
-pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: TryInto<AvailableBlock<T::EthSpec>>> {
+pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> {
     block: B,
     block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
@@ -660,7 +660,7 @@ type PayloadVerificationHandle<E> =
 /// Note: a `ExecutionPendingBlock` is not _forever_ valid to be imported, it may later become invalid
 /// due to finality or some other event. A `ExecutionPendingBlock` should be imported into the
 /// `BeaconChain` immediately after it is instantiated.
-pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: TryInto<AvailableBlock, T::EthSpec>> {
+pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> {
     pub block: B,
     pub block_root: Hash256,
     pub state: BeaconState<T::EthSpec>,
@@ -674,9 +674,7 @@ pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: TryInto<AvailableBlock,
 /// Implemented on types that can be converted into a `ExecutionPendingBlock`.
 ///
 /// Used to allow functions to accept blocks at various stages of verification.
-pub trait IntoExecutionPendingBlock<T: BeaconChainTypes, B: TryInto<AvailableBlock, T::EthSpec>>:
-    Sized
-{
+pub trait IntoExecutionPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>>: Sized {
     fn into_execution_pending_block(
         self: B,
         block_root: Hash256,

@@ -6,7 +6,7 @@ use derivative::Derivative;
 use fork_choice::{CountUnrealized, PayloadVerificationStatus};
 use futures::channel::{
     mpsc,
-    mpsc::{error::RecvError as RecvBlobError, error::SendError},
+    mpsc::{RecvError as RecvBlobError, SendError},
 };
 use kzg::Kzg;
 use slot_clock::SlotClock;
@@ -28,8 +28,6 @@ use types::{
     SignedBeaconBlockHeader, SignedBlobSidecar, Slot, Transactions,
 };
 use types::{BeaconState, Blob, Epoch, ExecPayload, KzgProof};
-
-pub type SendBlobError<E: EthSpec> = SendError<Arc<SignedBlobSidecar<E>>>;
 
 #[derive(Debug)]
 pub enum BlobError<E: EthSpec> {
@@ -110,13 +108,13 @@ pub enum DataAvailabilityError<E: EthSpec> {
     /// Receiving an available block from pending-availability blobs cache failed.
     RecvBlobError(RecvBlobError),
     /// Sending an available block from pending-availability blobs cache failed.
-    SendBlobError(SendBlobError<E>),
+    SendBlobError(SendError<Arc<SignedBlobSidecar<E>>>),
     // todo(emhane): move kzg error here to take care of blob or block
 }
 
 macro_rules! impl_from_error {
-    ($error: ident, $parent_error: ident) => {
-        impl From<$error> for $parent_error {
+    ($error: ident, $parent_error: ident, $generic: ident) => {
+        impl From<$error> for $parent_error<$generic> {
             fn from(e: $error) -> Self {
                 Self::$error(e)
             }
@@ -124,11 +122,16 @@ macro_rules! impl_from_error {
     };
 }
 
-impl_from_error!(TimedOut, DataAvailabilityError);
-impl_from_error!(RecvBlobError, DataAvailabilityError);
-impl_from_error!(SendBlobError, DataAvailabilityError);
+impl_from_error!(TimedOut, DataAvailabilityError, EthSpec);
+impl_from_error!(RecvBlobError, DataAvailabilityError, EthSpec);
 
-impl From<BlobReconstructionError> for BlobError {
+impl From<SendError<Arc<SignedBlobSidecar<E>>>> for DataAvailabilityError<E> {
+    fn from(e: BeaconChainError) -> Self {
+        DataAvailabilityError::SendBlobError(e)
+    }
+}
+
+impl<E: EthSpec> From<BlobReconstructionError> for BlobError<E> {
     fn from(e: BlobReconstructionError) -> Self {
         match e {
             BlobReconstructionError::UnavailableBlobs => BlobError::UnavailableBlobs,
@@ -273,21 +276,23 @@ pub trait AsBlobSidecar<E: EthSpec> {
 }
 
 macro_rules! impl_as_blob_sidecar_fn_for_signed_sidecar {
-    ($fn_name: ident, $return_type: ident, $self: ident) => {
+    ($fn_name: ident, $return_type: ident) => {
         fn $fn_name() -> $return_type {
-            $self.message().$fn_name()
+            Self::message().$fn_name()
         }
     };
 }
 
 impl<E: EthSpec> AsBlobSidecar<E> for Arc<SignedBlobSidecar<E>> {
-    impl_as_blob_sidecar_fn_for_signed_sidecar!(beacon_block_root, Hash256, Self);
-    impl_as_blob_sidecar_fn_for_signed_sidecar!(beacon_block_slot, Slot, Self);
-    impl_as_blob_sidecar_fn_for_signed_sidecar!(proposer_index, u64, Self);
-    impl_as_blob_sidecar_fn_for_signed_sidecar!(block_parent_root, Hash256, Self);
-    impl_as_blob_sidecar_fn_for_signed_sidecar!(blob_index, u64, Self);
-    impl_as_blob_sidecar_fn_for_signed_sidecar!(blob, Blob, Self);
-    impl_as_blob_sidecar_fn_for_signed_sidecar!(kzg_aggregated_proof, KzgProof, Self);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(beacon_block_root, Hash256);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(beacon_block_slot, Slot);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(proposer_index, u64);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(block_parent_root, Hash256);
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(blob_index, u64);
+    fn blob(&self) -> Blob<E> {
+        self.message().blob()
+    }
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(kzg_aggregated_proof, KzgProof);
 }
 
 #[derive(Copy, Clone)]
@@ -296,11 +301,20 @@ pub enum DataAvailabilityCheckRequired {
     No,
 }
 
-impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for GossipVerifiedBlock<T> {}
-impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for SignatureVerifiedBlock<T> {}
-impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for Arc<SignedBeaconBlock<T::EthSpec>> {}
+impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
+    for GossipVerifiedBlock<T, B>
+{
+}
+impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
+    for SignatureVerifiedBlock<T, B>
+{
+}
+impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
+    for Arc<SignedBeaconBlock<T::EthSpec>>
+{
+}
 
-impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for AvailabilityPendingBlock {
+impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B> for AvailabilityPendingBlock<T::EthSpec> {
     fn into_availablilty_pending_block(
         self,
         block_root: Hash256,
@@ -309,11 +323,11 @@ impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for AvailabilityPendin
         self
     }
 }
-pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
+pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> {
     /// Takes a receiver as param, on which the availability-pending block receives kzg-verified
     /// blobs.
     fn into_availablilty_pending_block(
-        self,
+        self: B,
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> AvailabilityPendingBlock<T::EthSpec> {
@@ -420,7 +434,7 @@ pub struct AvailabilityPendingBlock<E: EthSpec> {
 }
 
 impl<E: EthSpec> Future for AvailabilityPendingBlock<E> {
-    type Output = Result<AvailableBlock, BlobError>;
+    type Output = Result<AvailableBlock<E>, BlobError<E>>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.data_availability_handle.poll()
     }
@@ -477,14 +491,14 @@ impl<E: EthSpec> AvailableBlock<E> {
 }
 
 impl<E: EthSpec> TryInto<AvailableBlock<E>> for AvailableBlock<E> {
-    type Error = BlobError;
+    type Error = BlobError<E>;
     fn try_into(self, chain: &BeaconChain<E>) -> Result<AvailableBlock<E>, Self::Error> {
         Ok(self)
     }
 }
 
 impl<E: EthSpec> TryInto<AvailableBlock<E>> for &AvailabilityPendingBlock<E> {
-    type Error = BlobError;
+    type Error = BlobError<E>;
     fn try_into(self) -> Result<AvailableBlock<E>, Self::Error> {
         match self.poll() {
             Poll::Pending => Err(BlobError::PendingAvailability),
