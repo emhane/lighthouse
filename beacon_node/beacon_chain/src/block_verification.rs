@@ -305,7 +305,7 @@ pub enum BlockError<T: EthSpec> {
     ParentExecutionPayloadInvalid {
         parent_root: Hash256,
     },
-    BlobValidation(BlobError),
+    BlobValidation(BlobError<T>),
 }
 
 impl<T: EthSpec> From<BlobError> for BlockError<T> {
@@ -678,7 +678,7 @@ pub trait IntoExecutionPendingBlock<T: BeaconChainTypes, B: TryInto<AvailableBlo
     Sized
 {
     fn into_execution_pending_block(
-        self,
+        self: B,
         block_root: Hash256,
         chain: &Arc<BeaconChain<T>>,
         notify_execution_layer: NotifyExecutionLayer,
@@ -966,13 +966,13 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for GossipVerifiedBlock<T
     }
 }
 
-impl<T: BeaconChainTypes> SignatureVerifiedBlock<T> {
+impl<T: BeaconChainTypes, B: TryInto<AvailableBlock<T::EthSpec>>> SignatureVerifiedBlock<T, B> {
     /// Instantiates `Self`, a wrapper that indicates that all signatures (except the deposit
     /// signatures) are valid  (i.e., signed by the correct public keys).
     ///
     /// Returns an error if the block is invalid, or if the block was unable to be verified.
     pub fn new(
-        block: AvailabilityPendingBlock<T::EthSpec>,
+        block: B,
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> Result<Self, BlockError<T::EthSpec>> {
@@ -1022,7 +1022,7 @@ impl<T: BeaconChainTypes> SignatureVerifiedBlock<T> {
 
     /// As for `new` above but producing `BlockSlashInfo`.
     pub fn check_slashable(
-        block: AvailabilityPendingBlock<T::EthSpec>,
+        block: B,
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> Result<Self, BlockSlashInfo<BlockError<T::EthSpec>>> {
@@ -1131,7 +1131,7 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for Arc<SignedBeaconBlock
         let block_root = check_block_relevancy(&self, block_root, chain)
             .map_err(|e| BlockSlashInfo::SignatureNotChecked(self.signed_block_header(), e))?;
 
-        SignatureVerifiedBlock::check_slashable(available_block, block_root, chain)?
+        SignatureVerifiedBlock::check_slashable(self, block_root, chain)?
             .into_execution_pending_block_slashable(block_root, chain, notify_execution_layer)
     }
 
@@ -1175,7 +1175,7 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for AvailableBlock<T::Eth
         let block_root = check_block_relevancy(&self, block_root, chain)
             .map_err(|e| BlockSlashInfo::SignatureNotChecked(self.signed_block_header(), e))?;
 
-        SignatureVerifiedBlock::check_slashable(available_block, block_root, chain)?
+        SignatureVerifiedBlock::check_slashable(self, block_root, chain)?
             .into_execution_pending_block_slashable(block_root, chain, notify_execution_layer)
     }
 
@@ -1184,7 +1184,7 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T> for AvailableBlock<T::Eth
     }
 }
 
-impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
+impl<T: BeaconChainTypes, B: TryInto<AvailableBlock<T::EthSpec>>> ExecutionPendingBlock<T, B> {
     /// Instantiates `Self`, a wrapper that indicates that the given `block` is fully valid. See
     /// the struct-level documentation for more information.
     ///
@@ -1193,7 +1193,7 @@ impl<T: BeaconChainTypes> ExecutionPendingBlock<T> {
     ///
     /// Returns an error if the block is invalid, or if the block was unable to be verified.
     pub fn from_signature_verified_components(
-        block: AvailabilityPendingBlock<T::EthSpec>,
+        block: B,
         block_root: Hash256,
         parent: PreProcessingSnapshot<T::EthSpec>,
         mut consensus_context: ConsensusContext<T::EthSpec>,

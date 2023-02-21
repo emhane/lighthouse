@@ -1,5 +1,6 @@
 use kzg::{Error as KzgError, Kzg, BYTES_PER_BLOB};
-use types::{Blob, BlobsSidecar, EthSpec, Hash256, KzgCommitment, KzgProof, Slot};
+use ssz_types::VariableList;
+use types::{Blob, EthSpec, Hash256, KzgCommitment, KzgProof, Slot};
 
 use crate::blob_verification::AsBlobSidecar;
 
@@ -10,7 +11,7 @@ fn ssz_blob_to_crypto_blob<T: EthSpec>(blob: Blob<T>) -> kzg::Blob {
     arr.into()
 }
 
-pub fn validate_blob_sidecars<T: EthSpec, Bs: AsBlobSidecar<E>>(
+pub fn validate_blob_sidecars<T: EthSpec, Bs: AsBlobSidecar<T>>(
     kzg: &Kzg,
     slot: Slot,
     beacon_block_root: Hash256,
@@ -28,7 +29,7 @@ pub fn validate_blob_sidecars<T: EthSpec, Bs: AsBlobSidecar<E>>(
         }
     }
 
-    blobs.sort_by(|a, b| a.blob_index().partial_cmp(b.blob_index()).unwrap());
+    blob_sidecars.sort_by(|a, b| a.blob_index().partial_cmp(b.blob_index()).unwrap());
     let blobs = blob_sidecars
         .into_iter()
         .map(|blob| ssz_blob_to_crypto_blob::<T>(blob.blob.clone())) // TODO(pawan): avoid this clone

@@ -655,19 +655,19 @@ impl<T: BeaconChainTypes> Worker<T> {
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
     ) -> Result<GossipVerifiedBlob<T>, BlobError> {
-        let Some(entry) = self.chain.pending_blobs.get(blob.beacon_block_root()) else {
-            return None
-        };
         // todo(emhane): A blob at this index already exits, don't propagate blob, as according to
-        // spec (if kzg-verified or also not kzg-verified?)
-        if entry
-            .blobs
-            .iter()
-            .find(|cache_blob| cached_blob.blob_index() == blob.blob_index())
-        {
-            return None;
-        }
-        Ok(GossipVerifiedBlob(blob))
+        // spec (if kzg-verified or also not kzg-verified? only the former seems safe, hence todo
+        // links to singly kzg-verifying)
+        /*if let Some(entry) = self.chain.pending_blobs.get(blob.beacon_block_root()) {
+             if !entry
+             .blobs
+             .iter()
+             .find(|cache_blob| cached_blob.blob_index() == blob.blob_index())
+        {*/
+        return Ok(GossipVerifiedBlob(blob));
+        //}
+        //}
+        //return Err("a blob for this block at this index exists");
     }
 
     #[allow(clippy::too_many_arguments)]

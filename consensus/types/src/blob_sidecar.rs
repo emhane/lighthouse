@@ -69,10 +69,6 @@ pub struct SignedBlobSidecar<T: EthSpec> {
 }
 
 impl<T: EthSpec> SignedBlobSidecar<T> {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
     #[allow(clippy::integer_arithmetic)]
     pub fn max_size() -> usize {
         <SignedBlobSidecar<T> as Encode>::ssz_fixed_len()

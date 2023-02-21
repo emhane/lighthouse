@@ -1,8 +1,9 @@
 use crate::beacon_chain::{
-    CanonicalHead, BEACON_CHAIN_DB_KEY, DEFAULT_PENDING_AVAILABILITY_CHANNELS, ETH1_CACHE_DB_KEY,
-    OP_POOL_DB_KE,
+    CanonicalHead, PendingAvailabilityCache, BEACON_CHAIN_DB_KEY,
+    DEFAULT_PENDING_AVAILABILITY_CHANNELS, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
 };
 use crate::blob_cache::BlobCache;
+use crate::blob_verification::ExecutedBlock;
 use crate::eth1_chain::{CachingEth1Backend, SszEth1};
 use crate::eth1_finalization_cache::Eth1FinalizationCache;
 use crate::fork_choice_signal::ForkChoiceSignalTx;
@@ -23,8 +24,9 @@ use crate::{
 use eth1::Config as Eth1Config;
 use execution_layer::ExecutionLayer;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
-use futures::channel::mpsc::Sender;
+use futures::channel::mpsc;
 use kzg::{Kzg, TrustedSetup};
+use lru::LruCache;
 use operation_pool::{OperationPool, PersistedOperationPool};
 use parking_lot::RwLock;
 use proto_array::ReOrgThreshold;
@@ -87,7 +89,7 @@ pub struct BeaconChainBuilder<T: BeaconChainTypes> {
     execution_layer: Option<ExecutionLayer<T::EthSpec>>,
     event_handler: Option<ServerSentEventHandler<T::EthSpec>>,
     slot_clock: Option<T::SlotClock>,
-    shutdown_sender: Option<Sender<ShutdownReason>>,
+    shutdown_sender: Option<mpsc::Sender<ShutdownReason>>,
     head_tracker: Option<HeadTracker>,
     validator_pubkey_cache: Option<ValidatorPubkeyCache<T>>,
     spec: ChainSpec,
@@ -556,7 +558,7 @@ where
     }
 
     /// Sets a `Sender` to allow the beacon chain to send shutdown signals.
-    pub fn shutdown_sender(mut self, sender: Sender<ShutdownReason>) -> Self {
+    pub fn shutdown_sender(mut self, sender: mpsc::Sender<ShutdownReason>) -> Self {
         self.shutdown_sender = Some(sender);
         self
     }
@@ -934,11 +936,11 @@ where
                         Some(Err(block, e)) = pending_blocks => {
                             // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
                         }
-                        Some(Ok(block)) = pending_blocks => {
+                        Some(Ok((available_block, executed_block))) = pending_blocks => {
                             chain.spawn_blocking_handle(
                                 move || {
                                     chain.import_block_from_pending_availability_cache(
-                                        block
+                                        executed_block
                                     )
                                 },
                                 "import_block_from_peding_availability_cache_handle",
