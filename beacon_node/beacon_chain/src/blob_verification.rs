@@ -140,13 +140,13 @@ impl<E: EthSpec> From<BlobReconstructionError> for BlobError<E> {
     }
 }
 
-impl From<BeaconChainError> for BlobError {
+impl<E: EthSpec> From<BeaconChainError> for BlobError<E> {
     fn from(e: BeaconChainError) -> Self {
         BlobError::BeaconChainError(e)
     }
 }
 
-impl From<BeaconStateError> for BlobError {
+impl<E: EthSpec> From<BeaconStateError> for BlobError<E> {
     fn from(e: BeaconStateError) -> Self {
         BlobError::BeaconChainError(BeaconChainError::BeaconStateError(e))
     }
@@ -167,7 +167,7 @@ pub fn validate_blob_for_gossip<T: BeaconChainTypes, B: AsBlock<T>>(
     block_root: Hash256,
     chain: &BeaconChain<T>,
     blob_sidecar: SignedBlobSidecar<T>,
-) -> Result<GossipVerifiedBlob, BlobError> {
+) -> Result<GossipVerifiedBlob<T::EthSpec>, BlobError<T::EthSpec>> {
     let blob_slot = blob_sidecar.beacon_block_slot();
     // Do not gossip or process blobs from future or past slots.
     let latest_permissible_slot = chain
@@ -194,7 +194,7 @@ fn verify_blobs<E: EthSpec, B: AsBlock<E>, Bs: AsBlobSidecar<E>>(
     block: B,
     blobs: VariableList<Bs, E::MaxBlobsPerBlock>,
     kzg: Option<&Kzg>,
-) -> Result<(), BlobError> {
+) -> Result<(), BlobError<E>> {
     let Some(kzg) = kzg else {
         return Err(BlobError::TrustedSetupNotInitialized)
     };
@@ -277,8 +277,8 @@ pub trait AsBlobSidecar<E: EthSpec> {
 
 macro_rules! impl_as_blob_sidecar_fn_for_signed_sidecar {
     ($fn_name: ident, $return_type: ident) => {
-        fn $fn_name() -> $return_type {
-            Self::message().$fn_name()
+        fn $fn_name(&self) -> $return_type {
+            self.message().$fn_name()
         }
     };
 }
@@ -314,7 +314,9 @@ impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T
 {
 }
 
-impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B> for AvailabilityPendingBlock<T::EthSpec> {
+impl<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
+    for AvailabilityPendingBlock<T::EthSpec>
+{
     fn into_availablilty_pending_block(
         self,
         block_root: Hash256,
@@ -527,7 +529,7 @@ pub struct ExecutedBlock<E: EthSpec> {
 }
 
 impl<E: EthSpec, B: TryInto<AvailableBlock<E>>> Future for ExecutedBlock<E> {
-    type Output = Result<Self, BlobError>;
+    type Output = Result<Self, BlobError<E>>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let availability_state = self.block.poll();
         match availability_state {
@@ -575,6 +577,59 @@ pub trait AsBlock<E: EthSpec> {
     fn as_block(&self) -> &SignedBeaconBlock<E>;
     fn block_cloned(&self) -> Arc<SignedBeaconBlock<E>>;
 }
+
+macro_rules! impl_as_block_fn {
+    ($fn_name: ident, $return_type: ident) => {
+        fn $fn_name(&self) -> $return_type {
+            self.block.$fn_name()
+        }
+    };
+    ($fn_name: ident, $return_type: ident, $generic: ident) => {
+        fn $fn_name(&self) -> $return_type<$generic> {
+            self.block.$fn_name()
+        }
+    };
+    ($fn_name: ident, $return_type: ident, $arc: ident, $generic: ident) => {
+        fn $fn_name(&self) -> $arc<$return_type<$generic>> {
+            self.block.$fn_name()
+        }
+    };
+}
+
+macro_rules! impl_as_block {
+    ($generic_e: ident, $generic_a: ident, $type: ident) => {
+        impl<E: $generic_e, A: $generic_a<E>> AsBlock<E> for $type<E, A> {
+            impl_as_block_fn!(slot, Slot);
+            impl_as_block_fn!(epoch, Epoch);
+            impl_as_block_fn!(parent_root, Hash256);
+            impl_as_block_fn!(state_root, Hash256);
+            impl_as_block_fn!(signed_block_header, SignedBeaconBlockHeader);
+            impl_as_block_fn!(message, BeaconBlockRef, E);
+            fn as_block(&self) -> &SignedBeaconBlock<E> {
+                &self.block
+            }
+            impl_as_block_fn!(block_cloned, SignedBeaconBlock, Arc, E);
+        }
+    };
+    ($generic: ident, $type: ident) => {
+        impl<E: $generic> AsBlock<E> for $type<E> {
+            impl_as_block_fn!(slot, Slot);
+            impl_as_block_fn!(epoch, Epoch);
+            impl_as_block_fn!(parent_root, Hash256);
+            impl_as_block_fn!(state_root, Hash256);
+            impl_as_block_fn!(signed_block_header, SignedBeaconBlockHeader);
+            impl_as_block_fn!(message, BeaconBlockRef, E);
+            fn as_block(&self) -> &SignedBeaconBlock<E> {
+                &self.block
+            }
+            impl_as_block_fn!(block_cloned, SignedBeaconBlock, Arc, E);
+        }
+    };
+}
+
+impl_as_block!(EthSpec, AsBlock, GossipVerifiedBlock);
+impl_as_block!(EthSpec, AsBlock, SignatureVerifiedBlock);
+impl_as_block!(EthSpec, AvailabilityPendingBlock);
 
 impl<E: EthSpec> AsBlock<E> for BlockWrapper<E> {
     fn slot(&self) -> Slot {
@@ -628,57 +683,6 @@ impl<E: EthSpec> AsBlock<E> for BlockWrapper<E> {
 }
 
 impl<E: EthSpec> AsBlock<E> for AvailableBlock<E> {
-    fn slot(&self) -> Slot {
-        match self {
-            AvailableBlock::Block(block) => block.slot(),
-            AvailableBlock::BlockAndBlobs(block, _) => block.slot(),
-        }
-    }
-    fn epoch(&self) -> Epoch {
-        match self {
-            AvailableBlock::Block(block) => block.epoch(),
-            AvailableBlock::BlockAndBlobs(block, _) => block.epoch(),
-        }
-    }
-    fn parent_root(&self) -> Hash256 {
-        match self {
-            AvailableBlock::Block(block) => block.parent_root(),
-            AvailableBlock::BlockAndBlobs(block, _) => block.parent_root(),
-        }
-    }
-    fn state_root(&self) -> Hash256 {
-        match self {
-            AvailableBlock::Block(block) => block.state_root(),
-            AvailableBlock::BlockAndBlobs(block, _) => block.state_root(),
-        }
-    }
-    fn signed_block_header(&self) -> SignedBeaconBlockHeader {
-        match &self {
-            AvailableBlock::Block(block) => block.signed_block_header(),
-            AvailableBlock::BlockAndBlobs(block, _) => block.signed_block_header(),
-        }
-    }
-    fn message(&self) -> BeaconBlockRef<E> {
-        match &self {
-            AvailableBlock::Block(block) => block.message(),
-            AvailableBlock::BlockAndBlobs(block, _) => block.message(),
-        }
-    }
-    fn as_block(&self) -> &SignedBeaconBlock<E> {
-        match &self {
-            AvailableBlock::Block(block) => &block,
-            AvailableBlock::BlockAndBlobs(block, _) => &block,
-        }
-    }
-    fn block_cloned(&self) -> Arc<SignedBeaconBlock<E>> {
-        match &self {
-            AvailableBlock::Block(block) => block.clone(),
-            AvailableBlock::BlockAndBlobs(block, _) => block.clone(),
-        }
-    }
-}
-
-impl<E: EthSpec> AsBlock<E> for AvailabilityPendingBlock<E> {
     fn slot(&self) -> Slot {
         match &self.0 {
             AvailableBlockInner::Block(block) => block.slot(),

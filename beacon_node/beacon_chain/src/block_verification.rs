@@ -638,7 +638,7 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> {
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
 pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpec>> {
-    block: B,
+    pub block: B,
     block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
