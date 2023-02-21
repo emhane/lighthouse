@@ -655,7 +655,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
     ) -> Option<GossipVerifiedBlob<T>> {
-        let Some(entry) = self.chain.blobs_pending_availability_cache.get(blob.block_root()) else {
+        let Some(entry) = self.chain.blobs_pending_handles.get(blob.block_root()) else {
             return None
         };
         // A blob at this index already exits, don't propagate blob, as according to spec.
@@ -693,9 +693,15 @@ impl<T: BeaconChainTypes> Worker<T> {
         {
             let block_root = gossip_verified_block.block_root;
 
-            self.chain
-                .blobs_pending_availability_cache
-                .insert_gossip_verified_blob(block_root, gossip_verified_blob);
+            let tx = match self.chain.pending_blobs_tx.get(block_root) {
+                Some(tx) => tx,
+                None => {
+                    let (tx, rx) = oneshot::channel::<Arc<SignedBlobSidecar<T::EthSpec>>>();
+                    self.chain.pending_blocks_rx.put(block_root, rx);
+                    tx
+                }
+            };
+            tx.send(gossip_verified_blob).await?;
         }
     }
 

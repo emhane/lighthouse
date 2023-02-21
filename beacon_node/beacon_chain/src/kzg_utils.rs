@@ -8,7 +8,7 @@ fn ssz_blob_to_crypto_blob<T: EthSpec>(blob: Blob<T>) -> kzg::Blob {
     arr.into()
 }
 
-pub fn validate_blobs_sidecar<T: EthSpec>(
+pub fn validate_blob_sidecars<T: EthSpec>(
     kzg: &Kzg,
     slot: Slot,
     beacon_block_root: Hash256,
@@ -17,15 +17,15 @@ pub fn validate_blobs_sidecar<T: EthSpec>(
 ) -> Result<bool, KzgError> {
     if slot != blob_sidecars.beacon_block_slot
         || beacon_block_root != blob_sidecars.beacon_block_root
-        || blob_sidecars.blobs.len() != expected_kzg_commitments.len()
+        || blob_sidecars.len() != expected_kzg_commitments.len()
     {
         return Ok(false);
     }
 
+    blobs.sort_by(|a, b| a.index().partial_cmp(b.index()).unwrap());
     let blobs = blob_sidecars
-        .blobs
         .into_iter()
-        .map(|blob| ssz_blob_to_crypto_blob::<T>(blob.clone())) // TODO(pawan): avoid this clone
+        .map(|blob| ssz_blob_to_crypto_blob::<T>(blob.blob.clone())) // TODO(pawan): avoid this clone
         .collect::<Vec<_>>();
 
     kzg.verify_aggregate_kzg_proof(

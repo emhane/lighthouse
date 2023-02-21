@@ -1,14 +1,14 @@
 use core::future::Future;
 use derivative::Derivative;
+use futures::channel::mpsc::{Receiver, RecvError as RecvBlobError, SendError};
 use kzg::Kzg;
 use slot_clock::SlotClock;
 use ssz_types::VariableList;
 use std::{sync::Arc, task::Poll};
 use store::blob_sidecar::{BlobSidecar, SignedBlobSidecar};
 use tokio::{
-    sync::oneshot,
     task::JoinHandle,
-    time::{timeout, Duration, Timeout},
+    time::{time::error::Elapsed as TimedOut, timeout, Duration, Timeout},
 };
 
 use crate::beacon_chain::{BeaconChain, BeaconChainTypes, MAXIMUM_GOSSIP_CLOCK_DISPARITY};
@@ -25,8 +25,10 @@ use types::{
 };
 use types::{Epoch, ExecPayload};
 
+pub type SendBlobError = SendError<Arc<SignedBlobSidecar<E>>>;
+
 #[derive(Debug)]
-pub enum BlobError {
+pub enum BlobError<E: EthSpec, B: AsBlock<E>> {
     /// The blob sidecar is from a slot that is later than the current slot (with respect to the
     /// gossip clock disparity).
     ///
@@ -76,21 +78,37 @@ pub enum BlobError {
     PendingAvailability,
     /// Blobs provided for a pre-Eip4844 fork.
     InconsistentFork,
-    /// Blob verification timed out.
-    BlobVerificationTimedOut,
     /// Verifying availability of a block failed.
-    MakingBlockAvailableFailedCustom(String),
+    DataAvailabilityFailed(B, DataAvailabilityError),
 }
 
-impl From<time::error::Elapsed> for BlobError {
-    fn from(e: time::error::Elapsed) -> Self {
-        BlobError::BlobVerificationTimedOut
-    }
+pub enum DataAvailabilityError {
+    /// Awaiting blobs over network timed out.
+    TimedOut(TimedOut),
+    /// Receiving an available block from pending-availability blobs cache failed.
+    RecvBlobError(RecvBlobError),
+    /// Sending an available block from pending-availability blobs cache failed.
+    SendBlobError(SendBlobError),
+    // todo(emhane): move kzg error here to take care of blob or block
 }
 
-impl From<oneshot::error::RecvError> for BlobError {
-    fn from(e: oneshot::error::RecvError) -> Self {
-        BlobError::MakingBlockAvailableFailedCustom(e.into_string())
+macro_rules! impl_from_error {
+    ($error: ident, $parent_error: ident) => {
+        impl From<$error> for $parent_error {
+            fn from(e: $error) -> Self {
+                Self::$error(e)
+            }
+        }
+    };
+}
+
+impl_from_error!(TimedOut, DataAvailabilityError);
+impl_from_error!(RecvAvailableBlockError, DataAvailabilityError);
+impl_from_error!(SendAvailableBlockError, DataAvailabilityError);
+
+impl From<time::error::Elapsed> for Data {
+    fn from(e: BlobReconstructionError) -> Self {
+        DataAvailabilityError
     }
 }
 
@@ -148,11 +166,14 @@ pub fn validate_blob_for_gossip<T: BeaconChainTypes>(
     GossipVerifiedBlob(blob)
 }
 
-fn verify_blobs<E: EthSpec>(
-    block: &SignedBeaconBlock<E>,
-    blobs: VariableList<SignedBlobSidecar<E>, E::MaxBlobsPerBlock>,
-    kzg: &Kzg,
+fn verify_blobs<E: EthSpec, B: AsBlock<E>>(
+    block: B,
+    blobs: SmallVec<[SignedBlobSidecar<E>; E::MaxBlobsPerBlock]>,
+    kzg: Option<&Kzg>,
 ) -> Result<(), BlobError> {
+    let Some(kzg) = kzg else {
+        return Err(BlobError::TrustedSetupNotInitialized)
+    };
     let kzg_commitments = block
         .message()
         .body()
@@ -255,7 +276,7 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
     fn into_availablilty_pending_block(
         self,
         block_root: Hash256,
-        rx: Receiver<VerifiedBlobSidecars<T::EthSpec>>,
+        rx: Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>,
         chain: &BeaconChain<T>,
     ) -> AvailablilityPendingBlock<T::EthSpec>;
 }
@@ -264,7 +285,7 @@ impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for BlockWrapper<T::Et
     fn into_availablilty_pending_block(
         self,
         block_root: Hash256,
-        rx: Receiver<VerifiedBlobSidecars<T::EthSpec>>,
+        rx: Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>,
         chain: &BeaconChain<T>,
     ) -> AvailablilityPendingBlock<T::EthSpec> {
         self
@@ -275,31 +296,65 @@ impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for BlockWrapper<T::Et
     fn into_availablilty_pending_block(
         self,
         block_root: Hash256,
-        rx: Receiver<VerifiedBlobSidecars<T::EthSpec>>,
+        rx: Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>,
         chain: &BeaconChain<T>,
     ) -> AvailablilityPendingBlock<T::EthSpec> {
-        let data_availability_boundary = chain.data_availability_boundary();
-        let (da_check_required, data_availability_handle) =
-            data_availability_boundary.map_or(DataAvailabilityCheckRequired::No, |boundary| {
-                if self.slot().epoch(T::EthSpec::slots_per_epoch()) >= boundary {
-                    let kzg_commitments = self.message().body().kzg_commitments().len();
-                    let data_availability_handle = if kzg_commitments.is_empty() {
-                        verify_blobs(self.as_block(), VariableList::empty(), chain.kzg)?;
-                        async { Ok(None) }
-                    } else {
-                        tokio::time::timeout(
-                            Duration::from_secs(AVAILABILITY_PENDING_BLOCK_CACHE_ITEM_TIMEOUT),
-                            rx,
+        let block = self.block;
+        let Some(data_availability_boundary) = chain.data_availability_boundary() else {
+            return Ok(AvailabilityPendingBlock {
+                block,
+                data_availability_handle:  async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) },
+            })
+        };
+        let data_availability_handle = if self.slot().epoch(T::EthSpec::slots_per_epoch())
+            >= boundary
+        {
+            let kzg_commitments = self.message().body().kzg_commitments();
+            let data_availability_handle = if kzg_commitments.is_empty() {
+                // check that txns match with empty kzg-commitments
+                verify_blobs(self.as_block(), SmallVec::empty(), chain.kzg)?;
+                async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) }
+            } else {
+                let chain = chain.clone();
+                let block = block.clone();
+
+                let availability_handle = chain.task_executor.spwan_handle::<Result<
+                    AvailableBlock<T::EthSpec>,
+                    BlobError,
+                >>(
+                    async move {
+                        let blobs = SmallVec::<
+                            [BlobSidecar<T::EthSpec>; T::EthSpec::MaxBlobsPerBlock],
+                        >::new();
+                        for _ in kzg_commitments.len() {
+                            blobs.push(rx.recv()?);
+                        }
+                        let kzg_handle = executor.spawn_blocking_handle::<Result<(), BlobError>>(
+                            move || {
+                                verify_blobs(&block, blobs, chain.kzg)?;
+                            },
+                            &format!("verify_blobs_{block_root}"),
                         );
-                    };
-                    (DataAvailabilityCheckRequired::Yes, data_availability_handle)
-                } else {
-                    (DataAvailabilityCheckRequired::No, async { Ok(None) })
-                }
-            });
+                        kzg_handle.await?;
+                        chain.pending_blobs_tx.remove(&block_root);
+                        Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
+                            block, blobs,
+                        )))
+                    },
+                    format!("data_availability_block_{block_root}"),
+                );
+
+                tokio::time::timeout(
+                    Duration::from_secs(AVAILABILITY_PENDING_CACHE_ITEM_TIMEOUT),
+                    availability_handle,
+                )
+            };
+            data_availability_handle
+        } else {
+            async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) }
+        };
         Ok(AvailabilityPendingBlock {
             block,
-            da_check_required,
             data_availability_handle,
         })
     }
@@ -309,17 +364,19 @@ impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for BlockWrapper<T::Et
 #[derivative(PartialEq, Hash(bound = "E: EthSpec"))]
 pub struct AvailabilityPendingBlock<E: EthSpec> {
     block: Arc<SignedBeaconBlock<E>>,
-    da_check_required: bool,
     data_availability_handle: DataAvailabilityHandle<E>,
 }
 
-/// A wrapper type around blob sidecars to ensure only verified blobs are sent to
-/// availability-pending block.
-pub struct VerifiedBlobSidecars<E: EthSpec>(VariableList<BlobSidecar<E>, E::MaxBlobsPerBlock>);
+impl<E: EthSpec> Future for AvailabilityPendingBlock<E> {
+    type Output = Result<AvailableBlock, BlobError>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.data_availability_handle.poll()
+    }
+}
 
 /// Used to await blobs from the network.
 type DataAvailabilityHandle<E: EthSpec> =
-    impl Future<Output = Result<VerifiedBlobSidecars, oneshot::RecvError>>;
+    impl Future<Output = Result<AvailableBlock<E>, BlobError>>;
 
 /// A wrapper over a [`SignedBeaconBlock`] and its blobs if it has any. An [`AvailableBlock`] has
 /// passed any required data availability checks and should be used in consensus. This newtype
@@ -333,10 +390,13 @@ pub struct AvailableBlock<E: EthSpec>(AvailableBlockInner<E>);
 #[derive(Clone, Debug, Derivative)]
 #[derivative(PartialEq, Hash(bound = "E: EthSpec"))]
 enum AvailableBlockInner<E: EthSpec> {
+    /// A blob that does not have blobs, regardless if data availability check is required or not.
     Block(Arc<SignedBeaconBlock<E>>),
-    /// The container for any block which requires a data availability check at time of
-    /// construction.
-    BlockAndBlobs(Arc<SignedBeaconBlock<E>>, VerifiedBlobSidecars<E>),
+    /// The container for any block which has blobs and the blobs have been verified.
+    BlockAndBlobs(
+        Arc<SignedBeaconBlock<E>>,
+        VariableList<BlobSidecar<E>, E::MaxBlobsPerBlock>,
+    ),
 }
 
 impl<E: EthSpec> AvailableBlock<E> {
@@ -359,49 +419,32 @@ impl<E: EthSpec> AvailableBlock<E> {
     }
 }
 
-pub trait TryInto<AvailableBlock, E: EthSpec> {
-    /// Verifies blobs against kzg-commitments in block if data availability check is required.
-    fn try_into(self, chain: &BeaconChain<E>) -> Result<AvailableBlock<E>, BlobError>;
-}
-
 impl<E: EthSpec> TryInto<AvailableBlock<E>> for AvailableBlock<E> {
-    fn try_into(self, chain: &BeaconChain<E>) -> Result<AvailableBlock<E>, BlobError> {
+    type Error = BlobError;
+    fn try_into(self, chain: &BeaconChain<E>) -> Result<AvailableBlock<E>, Self::Error> {
         Ok(self)
     }
 }
 
 impl<E: EthSpec> TryInto<AvailableBlock<E>> for &AvailabilityPendingBlock<E> {
-    fn try_into(self) -> Result<AvailableBlock<E>, BlobError> {
-        let block = self.block;
-        if self.da_check_required {
-            let blobs = match self.data_availability_handle.poll() {
-                Poll::Pending => return Err(BlobError::PendingAvailability),
-                Poll::Ready(Err(e)) => {
-                    return Err(BlobError::MakingBlockAvailableFailedCustom(e.to_string()))
-                }
-                Poll::Ready(Ok(Some(blobs))) => blobs,
-                Poll::Ready(Ok(None)) => {
-                    return Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
-                        block,
-                        VariableList::empty(),
-                    )))
-                }
-            };
-            Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
-                block, blobs,
-            )))
-        } else {
-            Ok(AvailableBlock(AvailableBlockInner::Block(block)))
+    type Error = BlobError;
+    fn try_into(self) -> Result<AvailableBlock<E>, Self::Error> {
+        match self.poll() {
+            Poll::Pending => Err(BlobError::PendingAvailability),
+            Poll::Ready(Ok(available_block)) => Ok(available_block),
+            Poll::Ready(Err(e)) => Err(BlobError::DataAvailabilityFailed(self.clone(), e)),
         }
     }
 }
 
 /// The maximum time an [`AvailabilityPendingBlock`] is cached in seconds.
-pub const AVAILABILITY_PENDING_BLOCK_CACHE_ITEM_TIMEOUT: u64 = 5;
+pub const AVAILABILITY_PENDING_CACHE_ITEM_TIMEOUT: u64 = 5;
 
-/// A block that has passed payload verification and is waiting for its blobs.
-pub struct ExecutedBlock<E: EthSpec> {
-    block: AvailabilityPendingBlock<E>,
+/// A block that has passed payload verification and is waiting for its blobs via the handle on
+/// [`AvailabilityPendingBlock`].
+pub struct ExecutedBlock<E: EthSpec, B: TryInto<AvailableBlock<E>>> {
+    block_root: Hash256,
+    block: B,
     state: BeaconState<E>,
     confirmed_state_roots: Vec<Hash256>,
     payload_verification_status: PayloadVerificationStatus,
@@ -411,52 +454,27 @@ pub struct ExecutedBlock<E: EthSpec> {
     consensus_context: ConsensusContext<E>,
 }
 
-pub struct ExecutedBlockAvailabilityHandle {
-    /// Sender to advance [`DataAvailabilityHandle`] in an [`ExecutedBlock`]'s
-    /// [`AvailabilityPendingExecutedBlock`].
-    tx: oneshot::Sender,
-    /// The number of blobs to wait for before sending blobs on tx.
-    expected_blobs: usize,
-}
-
-impl<E: EthSpec> AvailabilityPendingBlock<E> {
-    /// Converts an [`AvailabilityPendingBlock`] to a cache item that stalls until receiving blobs
-    /// input from the network. Returns a pending-availability block cache item and a handle to
-    /// send it blobs.
-    pub fn cache_item(
-        self,
-        state: BeaconState<E>,
-        confirmed_state_roots: Vec<Hash256>,
-        payload_verification_status: PayloadVerificationStatus,
-        count_unrealized: CountUnrealized,
-        parent_block: SignedBeaconBlock,
-        parent_eth1_finalization_data: Eth1FinalizationData,
-        consensus_context: ConsensusContext<E>,
-    ) -> (ExecutedBlock<E>, ExecutedBlockAvailabilityHandle) {
-        let (tx, rx) = oneshot::channel::<()>();
-        self.data_availability_handle = Some(tokio::time::timeout(
-            Duration::from_secs(AVAILABILITY_PENDING_BLOCK_CACHE_ITEM_TIMEOUT),
-            rx.await,
-        ));
-        let expected_blobs = block
-            .message()
-            .body()
-            .blob_kzg_commitments()
-            .map_err(|_| BlobError::KzgCommitmentMissing)?
-            .len();
-        (
-            ExecutedBlock {
-                block: self,
-                state,
-                confirmed_state_roots,
-                payload_verification_status,
-                count_unrealized,
-                parent_block,
-                parent_eth1_finalization_data,
-                consensus_context,
-            },
-            ExecutedBlockAvailabilityHandle { tx, expected_blobs },
-        )
+impl<E: EthSpec, B: TryInto<AvailableBlock<E>>> Future for ExecutedBlock<E, B> {
+    type Output = Result<Self, BlobError>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.block.poll() {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(available_block)) => {
+                ExecutedBlock {
+                    block_root,
+                    block: available_block,
+                    state,
+                    confirmed_state_roots,
+                    payload_verification_status,
+                    count_unrealized,
+                    parent_block,
+                    parent_eth1_finalization_data,
+                    consensus_context,
+                } = self;
+                Poll::Ready(Ok(executed_block))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
     }
 }
 
@@ -646,5 +664,35 @@ impl<E: EthSpec> AsBlock<E> for AvailabilityPendingBlock<E> {
             AvailableBlockInner::Block(block) => block.clone(),
             AvailableBlockInner::BlockAndBlobs(block_blobs_pair) => block_blobs_pair.0.clone(),
         }
+    }
+}
+
+impl<E: EthSpec> AsBlock<E> for Arc<SignedBeaconBlock<E>> {
+    fn slot(&self) -> Slot {
+        self.slot()
+    }
+    fn epoch(&self) -> Epoch {
+        self.epoch()
+    }
+    fn parent_root(&self) -> Hash256 {
+        self.parent_root()
+    }
+    fn state_root(&self) -> Hash256 {
+        match self {
+            BlockWrapper::Block(block) => block.state_root(),
+            BlockWrapper::BlockAndBlobs(block, _) => block.state_root(),
+        }
+    }
+    fn signed_block_header(&self) -> SignedBeaconBlockHeader {
+        self.signed_block_headeR()
+    }
+    fn message(&self) -> BeaconBlockRef<E> {
+        self.message()
+    }
+    fn as_block(&self) -> &SignedBeaconBlock<E> {
+        &self
+    }
+    fn block_cloned(&self) -> Arc<SignedBeaconBlock<E>> {
+        self.clone()
     }
 }

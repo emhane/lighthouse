@@ -73,7 +73,10 @@ use fork_choice::{
     AttestationFromBlock, ExecutionStatus, ForkChoice, ForkchoiceUpdateParameters,
     InvalidationOperation, PayloadVerificationStatus, ResetPayloadStatuses,
 };
-use futures::channel::mpsc::Sender;
+use futures::{
+    channel::mpsc::{Receiver, Sender},
+    prelude::stream::futures_unordered::FuturesUnordered,
+};
 use itertools::process_results;
 use itertools::Itertools;
 use operation_pool::{AttestationRef, OperationPool, PersistedOperationPool};
@@ -83,6 +86,7 @@ use safe_arith::SafeArith;
 use slasher::Slasher;
 use slog::{crit, debug, error, info, trace, warn, Logger};
 use slot_clock::SlotClock;
+use smallvec::SmallVec;
 use ssz::Encode;
 use state_processing::{
     common::get_attesting_indices_from_state,
@@ -431,76 +435,30 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub validator_monitor: RwLock<ValidatorMonitor<T::EthSpec>>,
     pub blob_cache: BlobCache<T::EthSpec>,
     pub kzg: Option<Arc<kzg::Kzg>>,
-    pub blobs_pending_availability_cache: BlobsPendingAvailabilityCache,
+    pub pending_availability_cache_tx: Sender<ExecuteBlock<T::EthSpec>>,
+    /// Borrow sender to send a blob that arrived over network.
+    pub pending_blobs_tx: HashMap<Hash256, Sender<Arc<SignedBlobSidecar<T::EthSpec>>>>,
+    /// Remove sender to include in availability-pending block when block arrives over network.
+    pub pending_blocks_rx: HashMap<Hash256, Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>>,
 }
 
-pub struct BlobsPendingAvailabilityCache<E: EthSpec>(
-    HashMap<Hash256, BlobsPendingAvailabilityCacheItem<E>>,
-);
+#[derive(Default)]
+pub struct PendingAvailabilityCache<T: EthSpec>(FuturesUnordered<ExecutedBlock<T>>);
 
-pub struct BlobsPendingAvailabilityCacheItem<E: EthSpec> {
-    pub blobs: VariableList<BlobSidecar<E>, E::MaxBlobsPerBlock>,
-    pub expected_blobs: Option<usize>,
-    pub block: Option<Arc<SignedBeaconBlock<E>>>,
-    pub tx: Option<Sender<VerifiedBlobSidecars<E>>>,
+impl<T: EthSpec> Stream for PendingAvailabilityCache<T> {
+    type Item = ExecutedBlock<T>;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.0.is_empty() {
+            return Poll::Pending;
+        }
+        self.0.poll_next()
+    }
 }
 
-impl<E: EthSpec> BlobsPendingAvailabilityCache<E> {
-    pub async fn insert_gossip_verified_blob(
-        &mut self,
-        block_root: Hash256,
-        blob: GossipVerifiedBlob<E>,
-    ) -> Result<(), BlobError> {
-        let blob_cache_entry = self.0.entry(block_root).or_default();
-        let blobs = blob_cache_entry.blobs;
-        blobs.push(blob);
-        if Some(blobs.len()) != expected_blobs {
-            return Ok(());
-        }
-        let Some(tx) = tx else {
-                return Ok(())
-            };
-        let Some(block) = blob_cache_entry.block else {
-                return Ok(())
-            };
-        verify_blobs(&block, blobs, self)?;
-        drop(blob_cache_entry);
-        // todo(emhane): delete when receiving end succeeds
-        self.0.remove(&block_root);
-        let Some(tx) = tx else {
-                return Ok(())
-            };
-        tx.send(VerifiedBlobSidecars(blobs))
-            .await
-            .map_err(|e| BlobError::MakingBlockAvailableFailedCustom(e.to_string()))
+impl<T: EthSpec> PendingAvailabilityCache<T> {
+    fn push(&mut self, block: ExecutedBlock<T>) {
+        self.0.push(block)
     }
-
-    pub fn attach_availability_handle(
-        &mut self,
-        block: Arc<SignedBeaconBlock<E>>,
-        tx: Sender<VerifiedBlobSidecars<E>>,
-    ) -> Result<(), BlobError> {
-        let blob_cache_entry = self.0.entry(block_root).or_default();
-        let blobs = blob_cache_entry.blobs;
-        let expected_blobs = block.message().body().kzg_commitments().len();
-        if blobs.len() != expected_blobs {
-            // attatch
-            blob_cache_entry.expected_blobs = Some(expected_blobs);
-            blob_cache_entry.block = Some(block);
-            blob_cache_entry.tx = Some(tx);
-            return Ok(());
-        }
-        verify_blobs(&block, blobs, self)?;
-        drop(blob_cache_entry);
-        // todo(emhane): delete when receiving end succeeds
-        self.0.remove(&block_root);
-        tx.send(VerifiedBlobSidecars(blobs))
-            .await
-            .map_err(|e| BlobError::MakingBlockAvailableFailedCustom(e.to_string()))
-    }
-
-    // todo(emhane): delete when receiving end succeeds
-    pub fn remove(&mut self, block_root: Hash256, ...) {}
 }
 
 type BeaconBlockAndState<T, Payload> = (BeaconBlock<T, Payload>, BeaconState<T>);
@@ -2772,18 +2730,22 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // Increment the Prometheus counter for block processing requests.
         metrics::inc_counter(&metrics::BLOCK_PROCESSING_REQUESTS);
 
-        // Enable kzg-verification to start in background.
-        let (tx, rx) = oneshot::channel::<VerifiedBlobSidecars<T::EthSpec>>();
+        // If a blob receiver exists for the block root, some blobs have already arrived.
+        let existing_rx = self.pending_blocks_rx.remove(&block_root);
+        let rx = match existing_rx {
+            Some(rx) => rx,
+            None => {
+                let (tx, rx) = oneshot::channel::<Arc<SignedBlobSidecar<T::EthSpec>>>();
+                self.pending_blobs_tx.put(block_root, tx);
+                rx
+            }
+        };
         let pending_availability_block =
             block.into_availability_pending_block(block_root, rx, &self);
         let block: impl TryInto<AvailableBlock<T>> + IntoExecutionPendingBlock<T, B> =
             match pending_availability_block.try_into() {
                 Ok(available_block) => available_block,
-                Err(BlobError::PendingAvailability) => {
-                    self.blobs_pending_availability_cache
-                        .attach_availability_handle(pending_availability_block.block_cloned(), tx);
-                    pending_availability_block
-                }
+                Err(BlobError::PendingAvailability) => pending_availability_block,
                 Err(e) => return Err(e),
             };
 
@@ -2871,7 +2833,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
         // RELIC OF THE MERGE
         // Log the PoS pandas if a merge transition just occurred.
-        /*if is_valid_merge_transition_block {
+        if is_valid_merge_transition_block {
             info!(self.log, "{}", POS_PANDA_BANNER);
             info!(
                 self.log,
@@ -2898,10 +2860,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     .block_hash()
                     .into_root()
             );
-        }*/
+        }
 
         match block.try_into() {
-            // If this block has blobs, at best they have all come over network while waiting on
+            // At best all blobs have arrived over network and been verified while waiting on
             // input from execution layer.
             Ok(available_block) => {
                 let chain = self.clone();
@@ -2920,26 +2882,16 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                                 consensus_context,
                             )
                         },
-                        "payload_verification_handle",
+                        "import_block_to_fork_choice_handle", //todo(emhane): accurate name?
                     )
                     .await??;
 
                 Ok(block_hash)
             }
             Err(BlobError::PendingAvailability) => {
-                // move block to a background thread, like we use migrator, to do following.
-
-                let (cache_block, blob_cache_update) = block.cache_item();
-                self.block_pending_availability_cache
-                    .put(&block_root, cache_block);
-
-                /// **** When blobs arrive over network, don't call `process_block` from the background thread again, but instead use
-                // SORT BLOBS BEFORE NOTIFY BLOCK
-                // DAH in block, acts like a lock, so fantastic!
-                /*
-                let ExecutedBlock {
-                    block,
+                let executed_block = ExecutedBlock {
                     block_root,
+                    block,
                     state,
                     confirmed_state_roots,
                     payload_verification_status,
@@ -2947,38 +2899,41 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     parent_block,
                     parent_eth1_finalization_data,
                     consensus_context,
-                } = cache_block.block;
-
-                let available_block = block.try_into(&self.chain)?;
-
-                let chain = self.chain.clone()
-                let block_hash = self
-                .spawn_blocking_handle(
-                    move || {
-                        chain.import_block(
-                            available_block,
-                            block_root,
-                            state,
-                            confirmed_state_roots,
-                            payload_verification_status,
-                            count_unrealized,
-                            parent_block,
-                            parent_eth1_finalization_data,
-                            consensus_context,
-                        )
-                    },
-                    "payload_verification_handle",
-                )
-                .await??;
-
-                Ok(block_hash)
-                */
-
-                /// ****
+                };
+                self.pending_availability_cache_tx.send(executed_block);
                 Err(BlobError::PendingAvailability)
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Imports a block to fork choice that wasn't available at first attempt to import it.
+    pub fn import_block_from_pending_availability_cache(
+        &self,
+        executed_block: ExecutedBlock<AvailableBlock<T::EthSpec>>,
+    ) -> Result<Hash256, BlockError<T::EthSpec>> {
+        ExecutedBlock {
+            block_root,
+            block,
+            state,
+            confirmed_state_roots,
+            payload_verification_status,
+            count_unrealized,
+            parent_block,
+            parent_eth1_finalization_data,
+            consensus_context,
+        } = executed_block;
+        self.import_block(
+            block,
+            block_root,
+            state,
+            confirmed_state_roots,
+            payload_verification_status,
+            count_unrealized,
+            parent_block,
+            parent_eth1_finalization_data,
+            consensus_context,
+        )
     }
 
     /// Accepts a fully-verified block and imports it into the chain without performing any
