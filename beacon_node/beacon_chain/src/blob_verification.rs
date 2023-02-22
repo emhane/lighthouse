@@ -118,6 +118,7 @@ pub enum DataAvailabilityFailure<E: EthSpec> {
     ),
 }
 
+#[macro_export]
 macro_rules! impl_from_error {
     ($(<$($generic: ident : $trait: ident,)*>)*, $from_error: ty, $to_error: ty, $to_error_variant: path) => {
         impl$(<$($generic: $trait)*>)* From<$from_error> for $to_error {

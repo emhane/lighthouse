@@ -62,7 +62,7 @@ use crate::{
     },
     metrics, BeaconChain, BeaconChainError, BeaconChainTypes,
 };
-use crate::{impl_as_signed_block, impl_as_signed_block_fn};
+use crate::{impl_as_signed_block, impl_as_signed_block_fn, impl_from_error};
 use derivative::Derivative;
 use eth2::types::EventKind;
 use execution_layer::PayloadStatus;
@@ -289,16 +289,6 @@ pub enum BlockError<T: EthSpec> {
     ParentExecutionPayloadInvalid { parent_root: Hash256 },
     /// Blob validation failed.
     BlobValidation(BlobError<T>),
-}
-
-macro_rules! impl_from_error {
-    ($(<$($generic: ident : $trait: ident,)*>)*, $from_error: ty, $to_error: ty, $to_error_variant: path) => {
-        impl$(<$($generic: $trait)*>)* From<$from_error> for $to_error {
-            fn from(e: $from_error) -> Self {
-                $to_error_variant(e)
-            }
-        }
-    };
 }
 
 impl_from_error!(<T: EthSpec,>, BlobError<T>, BlockError<T>, Self::BlobValidation);

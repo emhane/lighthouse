@@ -2720,7 +2720,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Returns `Ok(block_root)` if the given `unverified_block` was successfully verified and
     /// imported into the chain.
     ///
-    /// Items that implement `IntoExecutionPendingBlock` and `IntoWrapAvailabilityPendingBlock` 
+    /// Items that implement `IntoExecutionPendingBlock` and `IntoWrapAvailabilityPendingBlock`
     /// include:
     ///
     /// - `SignedBeaconBlock`
