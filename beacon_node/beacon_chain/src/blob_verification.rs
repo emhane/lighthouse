@@ -579,57 +579,31 @@ pub trait AsBlock<E: EthSpec> {
 }
 
 macro_rules! impl_as_block_fn {
-    ($fn_name: ident, $return_type: ident) => {
+    ($fn_name: ident, $return_type: ty) => {
         fn $fn_name(&self) -> $return_type {
-            self.block.$fn_name()
-        }
-    };
-    ($fn_name: ident, $return_type: ident, $generic: ident) => {
-        fn $fn_name(&self) -> $return_type<$generic> {
-            self.block.$fn_name()
-        }
-    };
-    ($fn_name: ident, $return_type: ident, $arc: ident, $generic: ident) => {
-        fn $fn_name(&self) -> $arc<$return_type<$generic>> {
             self.block.$fn_name()
         }
     };
 }
 
 macro_rules! impl_as_block {
-    ($generic_e: ident, $generic_a: ident, $type: ident) => {
-        impl<E: $generic_e, A: $generic_a<E>> AsBlock<E> for $type<E, A> {
+    ($type: ty, $($generic: ident: $trait: ident$(<$generic_two: ident>)*,)+) => {
+        impl<$($generic: $trait$(<$generic_two>)*,)+> AsBlock<E> for $type {
             impl_as_block_fn!(slot, Slot);
             impl_as_block_fn!(epoch, Epoch);
             impl_as_block_fn!(parent_root, Hash256);
             impl_as_block_fn!(state_root, Hash256);
             impl_as_block_fn!(signed_block_header, SignedBeaconBlockHeader);
-            impl_as_block_fn!(message, BeaconBlockRef, E);
-            fn as_block(&self) -> &SignedBeaconBlock<E> {
-                &self.block
-            }
-            impl_as_block_fn!(block_cloned, SignedBeaconBlock, Arc, E);
-        }
-    };
-    ($generic: ident, $type: ident) => {
-        impl<E: $generic> AsBlock<E> for $type<E> {
-            impl_as_block_fn!(slot, Slot);
-            impl_as_block_fn!(epoch, Epoch);
-            impl_as_block_fn!(parent_root, Hash256);
-            impl_as_block_fn!(state_root, Hash256);
-            impl_as_block_fn!(signed_block_header, SignedBeaconBlockHeader);
-            impl_as_block_fn!(message, BeaconBlockRef, E);
-            fn as_block(&self) -> &SignedBeaconBlock<E> {
-                &self.block
-            }
-            impl_as_block_fn!(block_cloned, SignedBeaconBlock, Arc, E);
+            impl_as_block_fn!(message, BeaconBlockRef<E>);
+            impl_as_block_fn!(as_block, &SignedBeaconBlock<E>);
+            impl_as_block_fn!(block_cloned, Arc<SignedBeaconBlock<E>>);
         }
     };
 }
 
-impl_as_block!(EthSpec, AsBlock, GossipVerifiedBlock);
-impl_as_block!(EthSpec, AsBlock, SignatureVerifiedBlock);
-impl_as_block!(EthSpec, AvailabilityPendingBlock);
+impl_as_block!(GossipVerifiedBlock<E, A>, E: EthSpec, A: AsBlock<E>,);
+impl_as_block!(SignatureVerifiedBlock<E, A>, E: EthSpec, A: AsBlock<E>,);
+impl_as_block!(AvailabilityPendingBlock<E>, E: EthSpec,);
 
 impl<E: EthSpec> AsBlock<E> for BlockWrapper<E> {
     fn slot(&self) -> Slot {
