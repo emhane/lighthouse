@@ -62,7 +62,7 @@ use crate::{
     },
     metrics, BeaconChain, BeaconChainError, BeaconChainTypes,
 };
-use crate::{impl_as_signed_block, impl_as_signed_block_fn, impl_from_error};
+use crate::{impl_as_signed_block, impl_as_signed_block_fn, impl_wrap_type_in_variant};
 use derivative::Derivative;
 use eth2::types::EventKind;
 use execution_layer::PayloadStatus;
@@ -291,8 +291,8 @@ pub enum BlockError<T: EthSpec> {
     BlobValidation(BlobError<T>),
 }
 
-impl_from_error!(<T: EthSpec,>, BlobError<T>, BlockError<T>, Self::BlobValidation);
-impl_from_error!(<T: EthSpec,>, DataAvailabilityFailure<T>, BlockError<T>, Self::DataAvailability);
+impl_wrap_type_in_variant!(<T: EthSpec,>, BlobError<T>, BlockError<T>, Self::BlobValidation);
+impl_wrap_type_in_variant!(<T: EthSpec,>, DataAvailabilityFailure<T>, BlockError<T>, Self::DataAvailability);
 
 /// Returned when block validation failed due to some issue verifying
 /// the execution payload.

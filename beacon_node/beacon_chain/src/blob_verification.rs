@@ -119,25 +119,25 @@ pub enum DataAvailabilityFailure<E: EthSpec> {
 }
 
 #[macro_export]
-macro_rules! impl_from_error {
-    ($(<$($generic: ident : $trait: ident,)*>)*, $from_error: ty, $to_error: ty, $to_error_variant: path) => {
-        impl$(<$($generic: $trait)*>)* From<$from_error> for $to_error {
-            fn from(e: $from_error) -> Self {
-                $to_error_variant(e)
+macro_rules! impl_wrap_type_in_variant {
+    ($(<$($generic: ident : $trait: ident$(<$generic_two: ident>)*,)*>)*, $from_type: ty, $to_type: ty, $to_type_variant: path) => {
+        impl$(<$($generic: $trait$(<$generic_two>)*)*>)* From<$from_type> for $to_type {
+            fn from(e: $from_type) -> Self {
+                $to_type_variant(e)
             }
         }
     };
 }
 
-impl_from_error!(<E: EthSpec,>, kzg::Error, BlobError<E>, Self::KzgError);
-impl_from_error!(<E: EthSpec,>, BeaconChainError, BlobError<E>, Self::BeaconChainError);
-impl_from_error!(<E: EthSpec,>, Arc<SignedBlobSidecar<E>>, BlobError<E>, Self::BlobAlreadyExistsAtIndex);
-impl_from_error!(<E: EthSpec,>, Arc<SignedBlobSidecar<E>>, BlobError<E>, Self::SendOneshot);
-impl_from_error!(<E: EthSpec,>, Canceled, BlobError<E>, Self::RecvOneshot);
-impl_from_error!(<E: EthSpec,>, TimedOut, BlobError<E>, Self::TimedOut);
-impl_from_error!(<E: EthSpec,>, TryRecvError, BlobError<E>, Self::RecvBlob);
-impl_from_error!(<E: EthSpec,>, TrySendError<E>, BlobError<E>, Self::SendBlob);
-impl_from_error!(<E: EthSpec,>, DataAvailabilityFailure<E>, BlobError<E>, Self::DataAvailability);
+impl_wrap_type_in_variant!(<E: EthSpec,>, kzg::Error, BlobError<E>, Self::KzgError);
+impl_wrap_type_in_variant!(<E: EthSpec,>, BeaconChainError, BlobError<E>, Self::BeaconChainError);
+impl_wrap_type_in_variant!(<E: EthSpec,>, Arc<SignedBlobSidecar<E>>, BlobError<E>, Self::BlobAlreadyExistsAtIndex);
+impl_wrap_type_in_variant!(<E: EthSpec,>, Arc<SignedBlobSidecar<E>>, BlobError<E>, Self::SendOneshot);
+impl_wrap_type_in_variant!(<E: EthSpec,>, Canceled, BlobError<E>, Self::RecvOneshot);
+impl_wrap_type_in_variant!(<E: EthSpec,>, TimedOut, BlobError<E>, Self::TimedOut);
+impl_wrap_type_in_variant!(<E: EthSpec,>, TryRecvError, BlobError<E>, Self::RecvBlob);
+impl_wrap_type_in_variant!(<E: EthSpec,>, TrySendError<E>, BlobError<E>, Self::SendBlob);
+impl_wrap_type_in_variant!(<E: EthSpec,>, DataAvailabilityFailure<E>, BlobError<E>, Self::DataAvailability);
 
 impl<E: EthSpec> From<BlobReconstructionError> for BlobError<E> {
     fn from(e: BlobReconstructionError) -> Self {
@@ -252,18 +252,18 @@ fn verify_data_availability<T: EthSpec, Bs: AsBlobSidecar<T>>(
     Ok(())
 }
 
-/// A wrapper over a [`SignedBeaconBlock`]. This makes no claims about data availability and
-/// should not be used in consensus. This struct is useful in networking when we want to send
-/// blocks around without consensus checks.
+/// A wrapper over a block in which a [`SignedBeaconBlock`] is nested. This makes no claims about
+/// data availability and should not be used in consensus. This struct is useful in networking
+/// when we want to send blocks around without consensus checks.
 #[derive(Clone, Debug, Derivative)]
 #[derivative(PartialEq, Hash(bound = "E: EthSpec"))]
-pub struct BlockWrapper<E: EthSpec>(Arc<SignedBeaconBlock<E>>);
-
-impl<E: EthSpec> From<Arc<SignedBeaconBlock<E>>> for BlockWrapper<E> {
-    fn from(block: Arc<SignedBeaconBlock<E>>) -> Self {
-        BlockWrapper(block)
-    }
+pub enum BlockWrapper<E: EthSpec, B: AsSignedBlock<E>> {
+    GossipVerifiedBlock(GossipVerifiedBlock<E, B>),
+    SignatureVerifiedBlock(SignatureVerifiedBlock<E, B>),
 }
+// todo(emhane): which other blocks are passed to process_block?
+impl_wrap_type_in_variant!(<E: EthSpec, B: AsSignedBlock<E>,>, GossipVerifiedBlock<E, B>, BlockWrapper<E, B>, Self::GossipVerifiedBlock);
+impl_wrap_type_in_variant!(<E: EthSpec, B: AsSignedBlock<E>,>, SignatureVerifiedBlock<E, B>, BlockWrapper<E, B>, Self::SignatureVerifiedBlock);
 
 pub trait AsBlobSidecar<E: EthSpec> {
     fn beacon_block_root(&self) -> Hash256;
@@ -299,59 +299,6 @@ pub enum DataAvailabilityCheckRequired {
     No,
 }
 
-impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoWrapAvailabilityPendingBlock<T, B>
-    for GossipVerifiedBlock<T, B>
-{
-    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self {
-        let GossipVerifiedBlock {
-            block,
-            block_root,
-            parent,
-            consensus_context,
-        } = self;
-        let pending_availability_block = self.block_cloned().into_availability_pending_block();
-        GossipVerifiedBlock {
-            block: pending_availability_block,
-            block_root,
-            parent,
-            consensus_context,
-        }
-    }
-}
-
-impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoWrapAvailabilityPendingBlock<T, B>
-    for SignatureVerifiedBlock<T, B>
-{
-    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self {
-        let SignatureVerifiedBlock {
-            block,
-            block_root,
-            parent,
-            consensus_context,
-        } = self;
-        let pending_availability_block = self.block_cloned().into_availability_pending_block();
-        SignatureVerifiedBlock {
-            block: pending_availability_block,
-            block_root,
-            parent,
-            consensus_context,
-        }
-    }
-}
-
-impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoWrapAvailabilityPendingBlock<T, B>
-    for AvailabilityPendingBlock<T::EthSpec>
-{
-    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self {
-        self
-    }
-}
-
-/// When we have a block with important metadata we just want to modify the block the type wraps.
-pub trait IntoWrapAvailabilityPendingBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> {
-    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self;
-}
-
 // todo(emhane): calling again on an AvalabilityPendingBlock consequences if doesn't create a new
 // data availability handle?
 impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
@@ -376,6 +323,7 @@ impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingB
 {
 }
 
+// todo(emhane): use block wrapper here to pass all types.
 /// Consumes a block and wraps it in an [`AvailabilityPendingBlock`] with a
 /// [`DataAvailabilityHandle`] to receive blobs on from the network and kzg-verify them, returning
 /// an [`AvailableBlock`] on success, and on failure returns the parts that have been gathered so

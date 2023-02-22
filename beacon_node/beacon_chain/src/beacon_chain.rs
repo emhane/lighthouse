@@ -9,7 +9,7 @@ use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
     AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock,
-    IntoWrapAvailabilityPendingBlock,
+    IntoAvailabilityPendingBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -2730,7 +2730,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     ///
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     /// verification.
-    pub async fn process_block<A: AsSignedBlock<T>, B: IntoWrapAvailabilityPendingBlock<T, A>>(
+    pub async fn process_block<A: AsSignedBlock<T>, B: IntoAvailabilityPendingBlock<T, A>>(
         self: &Arc<Self>,
         block_root: Hash256,
         unverified_block: B,
