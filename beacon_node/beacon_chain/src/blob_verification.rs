@@ -610,57 +610,7 @@ impl_as_block!(SignatureVerifiedBlock<E, A>, E: EthSpec, A: AsSignedBlock<E>, .b
 impl_as_block!(AvailabilityPendingBlock<E>, E: EthSpec, .block);
 impl_as_block!(AvailabilityPendingBlock<E>, E: EthSpec, .block);
 impl_as_block!(Arc<SignedBeaconBlock<E>>, E: EthSpec,);
-
-impl<E: EthSpec> AsSignedBlock<E> for BlockWrapper<E> {
-    fn slot(&self) -> Slot {
-        match self {
-            BlockWrapper::Block(block) => block.slot(),
-            BlockWrapper::BlockAndBlobs(block, _) => block.slot(),
-        }
-    }
-    fn epoch(&self) -> Epoch {
-        match self {
-            BlockWrapper::Block(block) => block.epoch(),
-            BlockWrapper::BlockAndBlobs(block, _) => block.epoch(),
-        }
-    }
-    fn parent_root(&self) -> Hash256 {
-        match self {
-            BlockWrapper::Block(block) => block.parent_root(),
-            BlockWrapper::BlockAndBlobs(block, _) => block.parent_root(),
-        }
-    }
-    fn state_root(&self) -> Hash256 {
-        match self {
-            BlockWrapper::Block(block) => block.state_root(),
-            BlockWrapper::BlockAndBlobs(block, _) => block.state_root(),
-        }
-    }
-    fn signed_block_header(&self) -> SignedBeaconBlockHeader {
-        match &self {
-            BlockWrapper::Block(block) => block.signed_block_header(),
-            BlockWrapper::BlockAndBlobs(block, _) => block.signed_block_header(),
-        }
-    }
-    fn message(&self) -> BeaconBlockRef<E> {
-        match &self {
-            BlockWrapper::Block(block) => block.message(),
-            BlockWrapper::BlockAndBlobs(block, _) => block.message(),
-        }
-    }
-    fn as_block(&self) -> &SignedBeaconBlock<E> {
-        match &self {
-            BlockWrapper::Block(block) => &block,
-            BlockWrapper::BlockAndBlobs(block, _) => &block,
-        }
-    }
-    fn block_cloned(&self) -> Arc<SignedBeaconBlock<E>> {
-        match &self {
-            BlockWrapper::Block(block) => block.clone(),
-            BlockWrapper::BlockAndBlobs(block, _) => block.clone(),
-        }
-    }
-}
+impl_as_block!(BlockWrapper<E>, E: EthSpec, .0);
 
 impl<E: EthSpec> AsSignedBlock<E> for AvailableBlock<E> {
     fn slot(&self) -> Slot {
