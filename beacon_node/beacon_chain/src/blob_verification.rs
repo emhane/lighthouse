@@ -108,13 +108,13 @@ pub enum DataAvailabilityError<E: EthSpec> {
     /// Receiving an available block from pending-availability blobs cache failed.
     RecvBlobError(TryRecvError),
     /// Sending an available block from pending-availability blobs cache failed.
-    SendBlobError(SendError),
+    SendBlobError(TrySendError<E>),
     // todo(emhane): move kzg error here to take care of blob or block
 }
 
 macro_rules! impl_from_error {
-    ($(<$($generic: ident : $trait: ident,)*>)*, $from_error: ty, $to_error: ident, $to_error_variant: path) => {
-        impl$(<$($generic: $trait)*>)* From<$from_error> for $to_error$(<$($generic,)*>)* {
+    ($(<$($generic: ident : $trait: ident,)*>)*, $from_error: ty, $to_error: ty, $to_error_variant: path) => {
+        impl$(<$($generic: $trait)*>)* From<$from_error> for $to_error {
             fn from(e: $from_error) -> Self {
                 $to_error_variant(e)
             }
@@ -122,9 +122,9 @@ macro_rules! impl_from_error {
     };
 }
 
-impl_from_error!(<E: EthSpec,>, TimedOut, DataAvailabilityError, Self::TimedOut);
-impl_from_error!(<E: EthSpec,>, TryRecvError, DataAvailabilityError, Self::RecvBlobError);
-impl_from_error!(<E: EthSpec,>, TrySendError, DataAvailabilityError, Self::SendBlobError);
+impl_from_error!(<E: EthSpec,>, TimedOut, DataAvailabilityError<E>, Self::TimedOut);
+impl_from_error!(<E: EthSpec,>, TryRecvError, DataAvailabilityError<E>, Self::RecvBlobError);
+impl_from_error!(<E: EthSpec,>, TrySendError<E>, DataAvailabilityError<E>, Self::SendBlobError);
 
 impl<E: EthSpec> From<BlobReconstructionError> for BlobError<E> {
     fn from(e: BlobReconstructionError) -> Self {
