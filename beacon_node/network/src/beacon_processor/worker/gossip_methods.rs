@@ -669,8 +669,11 @@ impl<T: BeaconChainTypes> Worker<T> {
         };
         let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
         let gossip_verified_blob = GossipVerifiedBlob(Arc::new(blob));
-        tx.send((gossip_verified_blob, tx_oneshot))?;
-        rx_oneshot.await?;
+        tx.send((gossip_verified_blob, tx_oneshot))
+            .map_err(|e| DataAvailabilityFailure::Block(None, blobs, e));
+        rx_oneshot
+            .await
+            .map_err(|e| DataAvailabilityFailure::Block(None, blobs, e))
     }
 
     #[allow(clippy::too_many_arguments)]

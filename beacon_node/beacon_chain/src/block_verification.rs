@@ -45,7 +45,7 @@
 //! ```
 use crate::blob_verification::{
     validate_blob_for_gossip, AsBlock, AvailabilityPendingBlock, AvailableBlock, BlobError,
-    BlockWrapper, IntoAvailabilityPendingBlock, IntoBlockWrapper,
+    BlockWrapper, DataAvailabilityFailure, IntoBlockWrapper,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
 use crate::execution_payload::{
@@ -143,10 +143,7 @@ pub enum BlockError<T: EthSpec> {
     /// its parent.
     ParentUnknown(BlockWrapper<T>),
     /// The block skips too many slots and is a DoS risk.
-    TooManySkippedSlots {
-        parent_slot: Slot,
-        block_slot: Slot,
-    },
+    TooManySkippedSlots { parent_slot: Slot, block_slot: Slot },
     /// The block slot is greater than the present slot.
     ///
     /// ## Peer scoring
@@ -161,10 +158,7 @@ pub enum BlockError<T: EthSpec> {
     /// ## Peer scoring
     ///
     /// The peer has incompatible state transition logic and is faulty.
-    StateRootMismatch {
-        block: Hash256,
-        local: Hash256,
-    },
+    StateRootMismatch { block: Hash256, local: Hash256 },
     /// The block was a genesis block, these blocks cannot be re-imported.
     GenesisBlock,
     /// The slot is finalized, no need to import.
@@ -183,9 +177,7 @@ pub enum BlockError<T: EthSpec> {
     ///
     /// It's unclear if this block is valid, but it conflicts with finality and shouldn't be
     /// imported.
-    NotFinalizedDescendant {
-        block_parent_root: Hash256,
-    },
+    NotFinalizedDescendant { block_parent_root: Hash256 },
     /// Block is already known, no need to re-import.
     ///
     /// ## Peer scoring
@@ -198,10 +190,7 @@ pub enum BlockError<T: EthSpec> {
     ///
     /// The `proposer` has already proposed a block at this slot. The existing block may or may not
     /// be equal to the given block.
-    RepeatProposal {
-        proposer: u64,
-        slot: Slot,
-    },
+    RepeatProposal { proposer: u64, slot: Slot },
     /// The block slot exceeds the MAXIMUM_BLOCK_SLOT_NUMBER.
     ///
     /// ## Peer scoring
@@ -216,10 +205,7 @@ pub enum BlockError<T: EthSpec> {
     /// ## Peer scoring
     ///
     /// The block is invalid and the peer is faulty.
-    IncorrectBlockProposer {
-        block: u64,
-        local_shuffling: u64,
-    },
+    IncorrectBlockProposer { block: u64, local_shuffling: u64 },
     /// The proposal signature in invalid.
     ///
     /// ## Peer scoring
@@ -243,10 +229,7 @@ pub enum BlockError<T: EthSpec> {
     /// ## Peer scoring
     ///
     /// The block is invalid and the peer is faulty.
-    BlockIsNotLaterThanParent {
-        block_slot: Slot,
-        parent_slot: Slot,
-    },
+    BlockIsNotLaterThanParent { block_slot: Slot, parent_slot: Slot },
     /// At least one block in the chain segment did not have it's parent root set to the root of
     /// the prior block.
     ///
@@ -302,17 +285,23 @@ pub enum BlockError<T: EthSpec> {
     ///
     /// The peer sent us an invalid block, but I'm not really sure how to score this in an
     /// "optimistic" sync world.
-    ParentExecutionPayloadInvalid {
-        parent_root: Hash256,
-    },
+    ParentExecutionPayloadInvalid { parent_root: Hash256 },
+    /// Blob validation failed.
     BlobValidation(BlobError<T>),
 }
 
-impl<T: EthSpec> From<BlobError> for BlockError<T> {
-    fn from(e: BlobError) -> Self {
-        Self::BlobValidation(e)
-    }
+macro_rules! impl_from_error {
+    ($(<$($generic: ident : $trait: ident,)*>)*, $from_error: ty, $to_error: ty, $to_error_variant: path) => {
+        impl$(<$($generic: $trait)*>)* From<$from_error> for $to_error {
+            fn from(e: $from_error) -> Self {
+                $to_error_variant(e)
+            }
+        }
+    };
 }
+
+impl_from_error!(<T: EthSpec,>, BlobError<T>, BlockError<T>, Self::BlobValidation);
+impl_from_error!(<T: EthSpec,>, DataAvailabilityFailure<T>, BlockError<T>, Self::DataAvailability);
 
 /// Returned when block validation failed due to some issue verifying
 /// the execution payload.

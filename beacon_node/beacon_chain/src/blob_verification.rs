@@ -83,40 +83,39 @@ pub enum BlobError<E: EthSpec> {
     PendingAvailability,
     /// Blobs provided for a pre-Eip4844 fork.
     InconsistentFork,
-    /// Verifying availability of a block failed.
-    DataAvailabilityFailed(DataAvailabilityFailed<E>),
     /// A blob for this index has already been seen.
     BlobAlreadyExistsAtIndex(Arc<SignedBlobSidecar<E>>),
-    SendErrorOneshot(Arc<SignedBlobSidecar<E>>),
-    RecvErrorOneshot(Canceled),
-}
-
-#[derive(Debug)]
-pub enum DataAvailabilityFailed<E: EthSpec> {
-    /// Verifying availability of a block failed. Contains the blobs that have been received.
-    Block(
-        Arc<SignedBeaconBlock<E>>,
-        VariableList<Arc<SignedBlobSidecar<E>>, E::MaxBlobsPerBlock>,
-        DataAvailabilityError<E>,
-    ),
-    /// Verifying availability of a block that which already has a verified execution payload
-    /// failed. Contains the blobs that have been received.
-    ExecutedBlock(
-        Arc<ExecutedBlock<E>>,
-        VariableList<Arc<SignedBlobSidecar<E>>, E::MaxBlobsPerBlock>,
-        DataAvailabilityError<E>,
-    ),
-}
-
-#[derive(Debug)]
-pub enum DataAvailabilityError<E: EthSpec> {
+    /// Error using one shot sender.
+    SendOneshot(Arc<SignedBlobSidecar<E>>),
+    /// Error using one shot receiver.
+    RecvOneshot(Canceled),
     /// Awaiting blobs over network timed out.
     TimedOut(TimedOut),
     /// Receiving an available block from pending-availability blobs cache failed.
-    RecvBlobError(TryRecvError),
+    RecvBlob(TryRecvError),
     /// Sending an available block from pending-availability blobs cache failed.
-    SendBlobError(TrySendError<E>),
-    // todo(emhane): move kzg error here to take care of blob or block
+    SendBlob(TrySendError<E>),
+    /// Making a block available failed. The [`DataAvailabilityFailure`] error contains the block
+    /// or blobs that have already been received over the network.
+    DataAvailability(DataAvailabilityFailure<E>),
+}
+
+#[derive(Debug)]
+pub enum DataAvailabilityFailure<E: EthSpec> {
+    /// Verifying data availability of a block failed. Contains the blobs that have been received
+    /// and the block if it has been received.
+    Block(
+        Option<Arc<SignedBeaconBlock<E>>>,
+        VariableList<Arc<SignedBlobSidecar<E>>, E::MaxBlobsPerBlock>,
+        BlobError<E>,
+    ),
+    /// Verifying data availability of a block that which already has a verified execution payload
+    /// failed. The error contains the block and blobs that have been received.
+    ExecutedBlock(
+        Arc<ExecutedBlock<E>>,
+        VariableList<Arc<SignedBlobSidecar<E>>, E::MaxBlobsPerBlock>,
+        BlobError<E>,
+    ),
 }
 
 macro_rules! impl_from_error {
@@ -129,9 +128,15 @@ macro_rules! impl_from_error {
     };
 }
 
-impl_from_error!(<E: EthSpec,>, TimedOut, DataAvailabilityError<E>, Self::TimedOut);
-impl_from_error!(<E: EthSpec,>, TryRecvError, DataAvailabilityError<E>, Self::RecvBlobError);
-impl_from_error!(<E: EthSpec,>, TrySendError<E>, DataAvailabilityError<E>, Self::SendBlobError);
+impl_from_error!(<E: EthSpec,>, kzg::Error, BlobError<E>, Self::KzgError);
+impl_from_error!(<E: EthSpec,>, BeaconChainError, BlobError<E>, Self::BeaconChainError);
+impl_from_error!(<E: EthSpec,>, Arc<SignedBlobSidecar<E>>, BlobError<E>, Self::BlobAlreadyExistsAtIndex);
+impl_from_error!(<E: EthSpec,>, Arc<SignedBlobSidecar<E>>, BlobError<E>, Self::SendOneshot);
+impl_from_error!(<E: EthSpec,>, Canceled, BlobError<E>, Self::RecvOneshot);
+impl_from_error!(<E: EthSpec,>, TimedOut, BlobError<E>, Self::TimedOut);
+impl_from_error!(<E: EthSpec,>, TryRecvError, BlobError<E>, Self::RecvBlob);
+impl_from_error!(<E: EthSpec,>, TrySendError<E>, BlobError<E>, Self::SendBlob);
+impl_from_error!(<E: EthSpec,>, DataAvailabilityFailure<E>, BlobError<E>, Self::DataAvailability);
 
 impl<E: EthSpec> From<BlobReconstructionError> for BlobError<E> {
     fn from(e: BlobReconstructionError) -> Self {
@@ -139,12 +144,6 @@ impl<E: EthSpec> From<BlobReconstructionError> for BlobError<E> {
             BlobReconstructionError::UnavailableBlobs => BlobError::UnavailableBlobs,
             BlobReconstructionError::InconsistentFork => BlobError::InconsistentFork,
         }
-    }
-}
-
-impl<E: EthSpec> From<BeaconChainError> for BlobError<E> {
-    fn from(e: BeaconChainError) -> Self {
-        BlobError::BeaconChainError(e)
     }
 }
 
@@ -370,7 +369,7 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
 
                 let availability_handle = chain.task_executor.spwan_handle::<Result<
                     AvailableBlock<T::EthSpec>,
-                    BlobError,
+                    DataAvailabilityFailure<T::EthSpec>,
                 >>(
                     async move {
                         let blobs = VariableList::<
@@ -387,7 +386,9 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
                                     }) {
                                         tx.send(Err(BlobError::BlobAlreadyExistsAtIndex(blob)))?;
                                     } else {
-                                        tx.send(()).map_err(|e| BlobError::SendErrorOneshot(e))?;
+                                        tx.send(()).map_err(|e| {
+                                            DataAvailabilityFailure::Block(Some(block), blobs, e)
+                                        })?;
                                     }
                                     blobs.push(blob);
                                     if blobs.len() == kzg_commitments.len() {
@@ -398,7 +399,7 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
                                     break;
                                 }
                                 Err(e) => {
-                                    return BlobError::DataAvailabilityFailed(block, blobs, e)
+                                    return DataAvailabilityFailure::Block(Some(block), blobs, e)
                                 }
                             }
                         }
@@ -407,14 +408,14 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
                             .spawn_blocking_handle::<Result<(), BlobError>>(
                                 move || {
                                     verify_blobs(&block, blobs, chain.kzg).map_err(|e| {
-                                        BlobError::DataAvailabilityFailed(block, blobs, e)
+                                        DataAvailabilityFailure::Block(Some(block), blobs, e)
                                     })
                                 },
                                 &format!("verify_blobs_{block_root}"),
                             );
                         kzg_handle
                             .await
-                            .map_err(|e| BlobError::DataAvailabilityFailed(block, blobs, e))?;
+                            .map_err(|e| DataAvailabilityFailure::Block(Some(block), blobs, e))?;
                         chain.pending_blobs_tx.remove(&block_root);
                         Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
                             block, blobs,
@@ -454,8 +455,7 @@ impl<E: EthSpec> Future for AvailabilityPendingBlock<E> {
 }
 
 /// Used to await blobs from the network.
-type DataAvailabilityHandle<E: EthSpec> =
-    JoinHandle<Result<AvailableBlock<E>, DataAvailabilityFailed<E>>>;
+type DataAvailabilityHandle<E: EthSpec> = JoinHandle<Result<AvailableBlock<E>, BlobError<E>>>;
 
 /// A wrapper over a [`SignedBeaconBlock`] and its blobs if it has any. An [`AvailableBlock`] has
 /// passed any required data availability checks and should be used in consensus. This newtype
@@ -545,13 +545,11 @@ impl<E: EthSpec, B: TryInto<AvailableBlock<E>>> Future for ExecutedBlock<E> {
         match availability_state {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(available_block)) => Poll::Ready(Ok(self)),
-            Poll::Ready(Err(BlobError::DataAvailabilityFailed(DataAvailabilityFailed::Block(
-                _,
-                blobs,
-                e,
-            )))) => Poll::Ready(Err(BlobError::DataAvailabilityFailed(
-                DataAvailabilityFailed::ExecutedBlock(self, blobs, e),
-            ))),
+            Poll::Ready(Err(BlobError::DataAvailability(BlobError::Block(_, blobs, e)))) => {
+                Poll::Ready(Err(BlobError::DataAvailability(
+                    DataAvailabilityFailure::ExecutedBlock(self, blobs, e),
+                )))
+            }
         }
     }
 }
