@@ -9,7 +9,7 @@ use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
     AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock,
-    IntoAvailabilityPendingBlock,
+    IntoWrapAvailabilityPendingBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -2720,17 +2720,17 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Returns `Ok(block_root)` if the given `unverified_block` was successfully verified and
     /// imported into the chain.
     ///
-    /// Items that implement `IntoExecutionPendingBlock` include:
+    /// Items that implement `IntoExecutionPendingBlock` and `IntoWrapAvailabilityPendingBlock` 
+    /// include:
     ///
     /// - `SignedBeaconBlock`
     /// - `GossipVerifiedBlock`
-    /// - `IntoAvailabilityPendingBlock`
     ///
     /// ## Errors
     ///
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     /// verification.
-    pub async fn process_block<A: AsSignedBlock<T>, B: IntoAvailabilityPendingBlock<T, A>>(
+    pub async fn process_block<A: AsSignedBlock<T>, B: IntoWrapAvailabilityPendingBlock<T, A>>(
         self: &Arc<Self>,
         block_root: Hash256,
         unverified_block: B,

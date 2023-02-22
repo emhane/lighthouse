@@ -62,6 +62,7 @@ use crate::{
     },
     metrics, BeaconChain, BeaconChainError, BeaconChainTypes,
 };
+use crate::{impl_as_signed_block, impl_as_signed_block_fn};
 use derivative::Derivative;
 use eth2::types::EventKind;
 use execution_layer::PayloadStatus;
@@ -627,11 +628,13 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
 pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> {
-    pub block: B,
+    block: B,
     block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
 }
+
+impl_as_signed_block!(SignatureVerifiedBlock<E, A>, E: EthSpec, A: AsSignedBlock<E>, .block);
 
 /// Used to await the result of executing payload with a remote EE.
 type PayloadVerificationHandle<E> =

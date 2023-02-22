@@ -298,19 +298,61 @@ pub enum DataAvailabilityCheckRequired {
     No,
 }
 
-impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
+impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoWrapAvailabilityPendingBlock<T, B>
     for GossipVerifiedBlock<T, B>
 {
-}
-impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
-    for SignatureVerifiedBlock<T, B>
-{
-}
-impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
-    for Arc<SignedBeaconBlock<T::EthSpec>>
-{
+    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self {
+        let GossipVerifiedBlock {
+            block,
+            block_root,
+            parent,
+            consensus_context,
+        } = self;
+        let pending_availability_block = self.block_cloned().into_availability_pending_block();
+        GossipVerifiedBlock {
+            block: pending_availability_block,
+            block_root,
+            parent,
+            consensus_context,
+        }
+    }
 }
 
+impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoWrapAvailabilityPendingBlock<T, B>
+    for SignatureVerifiedBlock<T, B>
+{
+    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self {
+        let SignatureVerifiedBlock {
+            block,
+            block_root,
+            parent,
+            consensus_context,
+        } = self;
+        let pending_availability_block = self.block_cloned().into_availability_pending_block();
+        SignatureVerifiedBlock {
+            block: pending_availability_block,
+            block_root,
+            parent,
+            consensus_context,
+        }
+    }
+}
+
+impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoWrapAvailabilityPendingBlock<T, B>
+    for AvailabilityPendingBlock<T::EthSpec>
+{
+    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self {
+        self
+    }
+}
+
+/// When we have a block with important metadata we just want to modify the block the type wraps.
+pub trait IntoWrapAvailabilityPendingBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> {
+    fn into_availablilty_pending_block(self, block_root: Hash256, chain: &BeaconChain<T>) -> Self;
+}
+
+// todo(emhane): calling again on an AvalabilityPendingBlock consequences if doesn't create a new
+// data availability handle?
 impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
     for AvailabilityPendingBlock<T::EthSpec>
 {
@@ -323,9 +365,21 @@ impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingB
     }
 }
 
+impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
+    for BlockWrapper<T::EthSpec>
+{
+}
+
+impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingBlock<T, B>
+    for Arc<SignedBeaconBlock<T::EthSpec>>
+{
+}
+
+/// Consumes a block and wraps it in an [`AvailabilityPendingBlock`] with a
+/// [`DataAvailabilityHandle`] to receive blobs on from the network and kzg-verify them, returning
+/// an [`AvailableBlock`] on success, and on failure returns the parts that have been gathered so
+/// far wrapped in a [`DataAvailabilityFailure::Block`] error variant upon failure.
 pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> {
-    /// Wraps a block in an [`AvailabilityPendingBlock`] with a [`DataAvailabilityHandle`] to
-    /// receive blobs from the network and kzg-verify them.
     fn into_availablilty_pending_block(
         self: B,
         block_root: Hash256,
@@ -343,8 +397,7 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsSignedBlock<T::
                 rx
             }
         };
-
-        let block = self.block;
+        let block = self.block_cloned();
         let Some(data_availability_boundary) = chain.data_availability_boundary() else {
             return Ok(AvailabilityPendingBlock {
                 block,
@@ -522,6 +575,7 @@ pub const AVAILABILITY_PENDING_CACHE_ITEM_TIMEOUT: u64 = 5;
 
 /// A block that has passed payload verification and is waiting for its blobs via the handle on
 /// [`AvailabilityPendingBlock`].
+// todo(emhane): needs to be send and sync
 pub struct ExecutedBlock<E: EthSpec> {
     block_root: Hash256,
     block: AvailabilityPendingBlock<E>,
@@ -572,6 +626,7 @@ impl<E: EthSpec> IntoBlockWrapper<E> for AvailabilityPendingBlock<E> {
 }
 
 pub trait AsSignedBlock<E: EthSpec> {
+    type B: Send + Sync + AsSignedBlock<E>;
     fn slot(&self) -> Slot;
     fn epoch(&self) -> Epoch;
     fn parent_root(&self) -> Hash256;
@@ -579,10 +634,11 @@ pub trait AsSignedBlock<E: EthSpec> {
     fn signed_block_header(&self) -> SignedBeaconBlockHeader;
     fn message(&self) -> BeaconBlockRef<E>;
     fn as_block(&self) -> &SignedBeaconBlock<E>;
-    fn block_cloned(&self) -> Arc<SignedBeaconBlock<E>>;
+    fn block_cloned(&self) -> Self::B;
 }
 
-macro_rules! impl_as_block_fn {
+#[macro_export]
+macro_rules! impl_as_signed_block_fn {
     ($fn_name: ident, $return_type: ty, $(.$field: tt)*) => {
         fn $fn_name(&self) -> $return_type {
             self$(.$field)*.$fn_name()
@@ -590,27 +646,27 @@ macro_rules! impl_as_block_fn {
     };
 }
 
-macro_rules! impl_as_block {
+#[macro_export]
+macro_rules! impl_as_signed_block {
     ($type: ty, $($generic: ident: $trait: ident$(<$generic_two: ident>)*,)+ $(.$field: tt)*) => {
         impl<$($generic: $trait$(<$generic_two>)*,)+> AsSignedBlock<E> for $type {
-            impl_as_block_fn!(slot, Slot, $(.$field)*);
-            impl_as_block_fn!(epoch, Epoch, $(.$field)*);
-            impl_as_block_fn!(parent_root, Hash256, $(.$field)*);
-            impl_as_block_fn!(state_root, Hash256, $(.$field)*);
-            impl_as_block_fn!(signed_block_header, SignedBeaconBlockHeader, $(.$field)*);
-            impl_as_block_fn!(message, BeaconBlockRef<E>, $(.$field)*);
-            impl_as_block_fn!(as_block, &SignedBeaconBlock<E>, $(.$field)*);
-            impl_as_block_fn!(block_cloned, Arc<SignedBeaconBlock<E>>, $(.$field)*);
+            type B = Arc<SignedBeaconBlock<E>>;
+            impl_as_signed_block_fn!(slot, Slot, $(.$field)*);
+            impl_as_signed_block_fn!(epoch, Epoch, $(.$field)*);
+            impl_as_signed_block_fn!(parent_root, Hash256, $(.$field)*);
+            impl_as_signed_block_fn!(state_root, Hash256, $(.$field)*);
+            impl_as_signed_block_fn!(signed_block_header, SignedBeaconBlockHeader, $(.$field)*);
+            impl_as_signed_block_fn!(message, BeaconBlockRef<E>, $(.$field)*);
+            impl_as_signed_block_fn!(as_block, &SignedBeaconBlock<E>, $(.$field)*);
+            impl_as_signed_block_fn!(block_cloned, Self::B, $(.$field)*);
         }
     };
 }
 
-impl_as_block!(GossipVerifiedBlock<E, A>, E: EthSpec, A: AsSignedBlock<E>, .block);
-impl_as_block!(SignatureVerifiedBlock<E, A>, E: EthSpec, A: AsSignedBlock<E>, .block);
-impl_as_block!(AvailabilityPendingBlock<E>, E: EthSpec, .block);
-impl_as_block!(AvailabilityPendingBlock<E>, E: EthSpec, .block);
-impl_as_block!(Arc<SignedBeaconBlock<E>>, E: EthSpec,);
-impl_as_block!(BlockWrapper<E>, E: EthSpec, .0);
+impl_as_signed_block!(Arc<SignedBeaconBlock<E>>, E: EthSpec,);
+impl_as_signed_block!(GossipVerifiedBlock<E, A>, E: EthSpec, A: AsSignedBlock<E>, .block);
+impl_as_signed_block!(AvailabilityPendingBlock<E>, E: EthSpec, .block);
+impl_as_signed_block!(BlockWrapper<E>, E: EthSpec, .0);
 
 impl<E: EthSpec> AsSignedBlock<E> for AvailableBlock<E> {
     fn slot(&self) -> Slot {
