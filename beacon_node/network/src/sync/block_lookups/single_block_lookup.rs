@@ -1,5 +1,5 @@
 use super::RootBlockTuple;
-use beacon_chain::blob_verification::{AsBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
 use beacon_chain::get_block_root;
 use lighthouse_network::{rpc::BlocksByRootRequest, PeerId};
 use rand::seq::IteratorRandom;

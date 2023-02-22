@@ -1,6 +1,6 @@
 use crate::{metrics, service::NetworkMessage, sync::SyncMessage};
 
-use beacon_chain::blob_verification::{AsBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
 use beacon_chain::store::Error;
 use beacon_chain::{
     attestation_verification::{self, Error as AttnError, VerifiedAttestation},
@@ -670,13 +670,17 @@ impl<T: BeaconChainTypes> Worker<T> {
         let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
         let gossip_verified_blob = GossipVerifiedBlob(Arc::new(blob));
         tx.send((gossip_verified_blob, tx_oneshot))
-            .map_err(|e| DataAvailabilityFailure::Block(None, blobs, e));
+            .map_err(|e| DataAvailabilityFailure::Block(None, VariableList::new(blob), e));
         match rx_oneshot.await {
             Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
                 // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
                 Ok(())
             }
-            Err(e) => Err(DataAvailabilityFailure::Block(None, blobs, e)),
+            Err(e) => Err(DataAvailabilityFailure::Block(
+                None,
+                VariableList::new(blobs),
+                e,
+            )),
             Ok(()) => Ok(()),
         }
     }

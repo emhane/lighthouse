@@ -1,5 +1,5 @@
 use crate::sync::manager::Id;
-use beacon_chain::blob_verification::{AsBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
 use lighthouse_network::rpc::methods::BlocksByRangeRequest;
 use lighthouse_network::PeerId;
 use std::collections::HashSet;

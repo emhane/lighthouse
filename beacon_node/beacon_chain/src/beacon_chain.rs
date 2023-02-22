@@ -8,7 +8,8 @@ use crate::beacon_proposer_cache::compute_proposer_duties_from_head;
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
-    AsBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock, IntoAvailabilityPendingBlock,
+    AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock,
+    IntoAvailabilityPendingBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -2675,7 +2676,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     pub async fn verify_block_for_gossip(
         self: &Arc<Self>,
         block: BlockWrapper<T::EthSpec>,
-    ) -> Result<GossipVerifiedBlock<T>, BlockError<T::EthSpec>> {
+    ) -> Result<GossipVerifiedBlock<T, B>, BlockError<T::EthSpec>> {
         let chain = self.clone();
         self.task_executor
             .clone()
@@ -2729,7 +2730,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     ///
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     /// verification.
-    pub async fn process_block<A: AsBlock<T>, B: IntoAvailabilityPendingBlock<T, A>>(
+    pub async fn process_block<A: AsSignedBlock<T>, B: IntoAvailabilityPendingBlock<T, A>>(
         self: &Arc<Self>,
         block_root: Hash256,
         unverified_block: B,
