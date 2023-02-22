@@ -1,4 +1,6 @@
-use crate::beacon_chain::{BeaconChain, BeaconChainTypes, MAXIMUM_GOSSIP_CLOCK_DISPARITY};
+use crate::beacon_chain::{
+    BeaconChain, BeaconChainTypes, DEFAULT_BLOB_CHANNEL_CAPACITY, MAXIMUM_GOSSIP_CLOCK_DISPARITY,
+};
 use crate::block_verification::{GossipVerifiedBlock, SignatureVerifiedBlock};
 use crate::{eth1_finalization_cache::Eth1FinalizationData, kzg_utils, BeaconChainError};
 use core::future::Future;
@@ -335,7 +337,7 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
                 // Channel with double capacity to T::EthSpec::MaxBlobsPerBlock, incase block
                 // comes late and duplicate blobs arrive for each index.
                 let (tx, rx) = mpsc::channel::<Arc<SignedBlobSidecar<T::EthSpec>>>(
-                    T::EthSpec::MaxBlobsPerBlock * 2,
+                    DEFAULT_BLOB_CHANNEL_CAPACITY,
                 );
                 chain.pending_blobs_tx.put(block_root, tx);
                 rx

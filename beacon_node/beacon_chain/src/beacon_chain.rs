@@ -180,6 +180,10 @@ pub const INVALID_FINALIZED_MERGE_TRANSITION_BLOCK_SHUTDOWN_REASON: &str =
 /// the block is successfully made available the matching sender is removed.
 pub const DEFAULT_PENDING_AVAILABILITY_CHANNELS: usize = 20;
 
+/// Channel with double capacity to `T::EthSpec::MaxBlobsPerBlock`, incase block
+/// comes late and duplicate blobs arrive for each index.
+pub const DEFAULT_BLOB_CHANNEL_CAPACITY: usize = EthSpec::MaxBlobsPerBlock * 2;
+
 /// Defines the behaviour when a block/block-root for a skipped slot is requested.
 pub enum WhenSlotSkipped {
     /// If the slot is a skip slot, return `None`.

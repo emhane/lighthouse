@@ -10,7 +10,7 @@ use beacon_chain::{
     sync_committee_verification::{self, Error as SyncCommitteeError},
     validator_monitor::get_block_delay_ms,
     BeaconChainError, BeaconChainTypes, BlockError, CountUnrealized, ForkChoiceError,
-    GossipVerifiedBlock, NotifyExecutionLayer,
+    GossipVerifiedBlock, NotifyExecutionLayer, DEFAULT_BLOB_CHANNEL_CAPACITY,
 };
 use futures::channel::mpsc;
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerAction, PeerId, ReportSource};
@@ -697,10 +697,8 @@ impl<T: BeaconChainTypes> Worker<T> {
             let tx = match self.chain.pending_blobs_tx.get(block_root) {
                 Some(tx) => tx,
                 None => {
-                    // Channel with double capacity to T::EthSpec::MaxBlobsPerBlock, incase block
-                    // comes late and duplicate blobs arrive for each index.
                     let (tx, rx) = mpsc::channel::<GossipVerifiedBlob<T::EthSpec>>(
-                        T::EthSpec::MaxBlobsPerBlock * 2,
+                        DEFUALT_BLOB_CHANNEL_CAPACITY,
                     );
                     self.chain.pending_blocks_rx.put(block_root, rx);
                     tx

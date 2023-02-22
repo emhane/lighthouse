@@ -1,5 +1,5 @@
 use crate::beacon_chain::{
-    CanonicalHead, PendingAvailabilityCache, BEACON_CHAIN_DB_KEY,
+    CanonicalHead, PendingAvailabilityCache, BEACON_CHAIN_DB_KEY, DEFAULT_BLOB_CHANNEL_CAPACITY,
     DEFAULT_PENDING_AVAILABILITY_CHANNELS, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
 };
 use crate::blob_cache::BlobCache;
@@ -788,7 +788,8 @@ where
         let head_for_snapshot_cache = head_snapshot.clone();
         let canonical_head = CanonicalHead::new(fork_choice, Arc::new(head_snapshot));
 
-        let (rx, pending_availability_cache_tx) = mpsc::channel::<ExecutedBlock<T::EthSpec>>();
+        let (rx, pending_availability_cache_tx) =
+            mpsc::channel::<ExecutedBlock<EthSpec>>(DEFAULT_BLOB_CHANNEL_CAPACITY);
 
         let beacon_chain = BeaconChain {
             spec: self.spec,
