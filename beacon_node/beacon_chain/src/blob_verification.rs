@@ -6,7 +6,7 @@ use derivative::Derivative;
 use fork_choice::{CountUnrealized, PayloadVerificationStatus};
 use futures::channel::{
     mpsc,
-    mpsc::{RecvError as RecvBlobError, SendError},
+    mpsc::{TryRecvError, TrySendError},
 };
 use kzg::Kzg;
 use slot_clock::SlotClock;
@@ -106,30 +106,25 @@ pub enum DataAvailabilityError<E: EthSpec> {
     /// Awaiting blobs over network timed out.
     TimedOut(TimedOut),
     /// Receiving an available block from pending-availability blobs cache failed.
-    RecvBlobError(RecvBlobError),
+    RecvBlobError(TryRecvError),
     /// Sending an available block from pending-availability blobs cache failed.
-    SendBlobError(SendError<Arc<SignedBlobSidecar<E>>>),
+    SendBlobError(SendError),
     // todo(emhane): move kzg error here to take care of blob or block
 }
 
 macro_rules! impl_from_error {
-    ($error: ident, $parent_error: ident, $generic: ident) => {
-        impl From<$error> for $parent_error<$generic> {
-            fn from(e: $error) -> Self {
-                Self::$error(e)
+    ($(<$($generic: ident : $trait: ident,)*>)*, $from_error: ty, $to_error: ident, $to_error_variant: path) => {
+        impl$(<$($generic: $trait)*>)* From<$from_error> for $to_error$(<$($generic,)*>)* {
+            fn from(e: $from_error) -> Self {
+                $to_error_variant(e)
             }
         }
     };
 }
 
-impl_from_error!(TimedOut, DataAvailabilityError, EthSpec);
-impl_from_error!(RecvBlobError, DataAvailabilityError, EthSpec);
-
-impl From<SendError<Arc<SignedBlobSidecar<E>>>> for DataAvailabilityError<E> {
-    fn from(e: BeaconChainError) -> Self {
-        DataAvailabilityError::SendBlobError(e)
-    }
-}
+impl_from_error!(<E: EthSpec,>, TimedOut, DataAvailabilityError, Self::TimedOut);
+impl_from_error!(<E: EthSpec,>, TryRecvError, DataAvailabilityError, Self::RecvBlobError);
+impl_from_error!(<E: EthSpec,>, TrySendError, DataAvailabilityError, Self::SendBlobError);
 
 impl<E: EthSpec> From<BlobReconstructionError> for BlobError<E> {
     fn from(e: BlobReconstructionError) -> Self {
@@ -218,7 +213,7 @@ fn verify_blobs<E: EthSpec, B: AsBlock<E>, Bs: AsBlobSidecar<E>>(
         kzg_commitments,
         transactions,
         block.slot(),
-        block_root,
+        block.block_root(),
         kzg,
     )
 }
@@ -230,7 +225,7 @@ fn verify_data_availability<T: EthSpec, Bs: AsBlobSidecar<T>>(
     block_slot: Slot,
     block_root: Hash256,
     kzg: &Kzg,
-) -> Result<(), BlobError> {
+) -> Result<(), BlobError<T>> {
     if verify_kzg_commitments_against_transactions::<T>(transactions, kzg_commitments).is_err() {
         return Err(BlobError::TransactionCommitmentMismatch);
     }
@@ -276,7 +271,7 @@ pub trait AsBlobSidecar<E: EthSpec> {
 }
 
 macro_rules! impl_as_blob_sidecar_fn_for_signed_sidecar {
-    ($fn_name: ident, $return_type: ident) => {
+    ($fn_name: ident, $return_type: ty) => {
         fn $fn_name(&self) -> $return_type {
             self.message().$fn_name()
         }
@@ -289,9 +284,7 @@ impl<E: EthSpec> AsBlobSidecar<E> for Arc<SignedBlobSidecar<E>> {
     impl_as_blob_sidecar_fn_for_signed_sidecar!(proposer_index, u64);
     impl_as_blob_sidecar_fn_for_signed_sidecar!(block_parent_root, Hash256);
     impl_as_blob_sidecar_fn_for_signed_sidecar!(blob_index, u64);
-    fn blob(&self) -> Blob<E> {
-        self.message().blob()
-    }
+    impl_as_blob_sidecar_fn_for_signed_sidecar!(blob, Blob<E>);
     impl_as_blob_sidecar_fn_for_signed_sidecar!(kzg_aggregated_proof, KzgProof);
 }
 
@@ -339,8 +332,10 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
         let rx = match existing_rx {
             Some(rx) => rx,
             None => {
+                // Channel with double capacity to T::EthSpec::MaxBlobsPerBlock, incase block
+                // comes late and duplicate blobs arrive for each index.
                 let (tx, rx) = mpsc::channel::<Arc<SignedBlobSidecar<T::EthSpec>>>(
-                    T::EthSpec::MaxBlobsPerBlock,
+                    T::EthSpec::MaxBlobsPerBlock * 2,
                 );
                 chain.pending_blobs_tx.put(block_root, tx);
                 rx
@@ -482,7 +477,7 @@ impl<E: EthSpec> AvailableBlock<E> {
         self,
     ) -> (
         Arc<SignedBeaconBlock<E>>,
-        Option<Arc<SignedBlobsSidecar<E>>>,
+        VariableList<SignedBlobSidecar<E>, E::MaxBlobsPerBlock>,
     ) {
         match self.0 {
             AvailableBlockInner::Block(block) => (block, None),

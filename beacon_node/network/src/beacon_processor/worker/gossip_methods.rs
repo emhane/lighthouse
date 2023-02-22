@@ -12,13 +12,13 @@ use beacon_chain::{
     BeaconChainError, BeaconChainTypes, BlockError, CountUnrealized, ForkChoiceError,
     GossipVerifiedBlock, NotifyExecutionLayer,
 };
+use futures::channel::mpsc;
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerAction, PeerId, ReportSource};
 use slog::{crit, debug, error, info, trace, warn};
 use slot_clock::SlotClock;
 use ssz::Encode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
-use tokio::sync::mpsc;
 use types::{
     Attestation, AttesterSlashing, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate,
     LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock,
@@ -697,12 +697,22 @@ impl<T: BeaconChainTypes> Worker<T> {
             let tx = match self.chain.pending_blobs_tx.get(block_root) {
                 Some(tx) => tx,
                 None => {
-                    let (tx, rx) = oneshot::channel::<GossipVerifiedBlob>();
+                    // Channel with double capacity to T::EthSpec::MaxBlobsPerBlock, incase block
+                    // comes late and duplicate blobs arrive for each index.
+                    let (tx, rx) = mpsc::channel::<GossipVerifiedBlob<T::EthSpec>>(
+                        T::EthSpec::MaxBlobsPerBlock * 2,
+                    );
                     self.chain.pending_blocks_rx.put(block_root, rx);
                     tx
                 }
             };
-            tx.send(gossip_verified_blob).await?;
+            if let Err(e) = tx.try_send(gossip_verified_blob).await {
+                error!(
+                    self.log, "Failed to send blob on sender";
+                    "block_root" => block_root,
+                    "error" => e,
+                );
+            }
         }
     }
 
