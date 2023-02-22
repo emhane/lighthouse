@@ -182,7 +182,7 @@ pub const DEFAULT_PENDING_AVAILABILITY_CHANNELS: usize = 20;
 
 /// Channel with double capacity to `T::EthSpec::MaxBlobsPerBlock`, incase block
 /// comes late and duplicate blobs arrive for each index.
-pub const DEFAULT_BLOB_CHANNEL_CAPACITY: usize = EthSpec::MaxBlobsPerBlock * 2;
+pub const DEFAULT_BLOB_CHANNEL_CAPACITY: usize = EthSpec::MaxBlobsPerBlock;
 
 /// Defines the behaviour when a block/block-root for a skipped slot is requested.
 pub enum WhenSlotSkipped {
