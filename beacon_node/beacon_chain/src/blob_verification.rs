@@ -245,8 +245,7 @@ fn verify_data_availability<T: EthSpec, Bs: AsBlobSidecar<T>>(
         block_root,
         kzg_commitments,
         blob_sidecars,
-    )?
-    {
+    )? {
         return Err(BlobError::InvalidKzgProof);
     }
     Ok(())
@@ -337,8 +336,6 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
         let rx = match existing_rx {
             Some(rx) => rx,
             None => {
-                // Channel with double capacity to T::EthSpec::MaxBlobsPerBlock, incase block
-                // comes late and duplicate blobs arrive for each index.
                 let (tx, rx) = mpsc::channel::<Arc<SignedBlobSidecar<T::EthSpec>>>(
                     DEFAULT_BLOB_CHANNEL_CAPACITY,
                 );
