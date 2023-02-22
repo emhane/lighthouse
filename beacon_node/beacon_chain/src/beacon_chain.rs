@@ -446,9 +446,11 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub blob_cache: BlobCache<T::EthSpec>,
     pub kzg: Option<Arc<kzg::Kzg>>,
     pub pending_availability_cache_tx: Sender<ExecutedBlock<T::EthSpec>>,
-    /// Borrow sender to send a blob that arrived over network.
+    /// Borrow channel handles to send a blob that arrived over network to its block and listen
+    /// for error.
     pub pending_blobs_tx: LruCache<Hash256, Sender<Arc<SignedBlobSidecar<T::EthSpec>>>>,
-    /// Remove sender to include in availability-pending block when block arrives over network.
+    /// Remove channel handles to include in availability-pending block when block arrives over
+    /// network, to receive blobs and return error.
     pub pending_blocks_rx: LruCache<Hash256, Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>>,
 }
 
@@ -461,11 +463,7 @@ impl<T: EthSpec> Stream for PendingAvailabilityCache<T> {
         if self.0.is_empty() {
             return Poll::Pending;
         }
-        let state = self.0.poll_next();
-        if let Poll::Ready(Err(e)) = state {
-            return Poll::Ready(Err(BlobError::DataAvailabilityFailed(self.clone(), e)));
-        }
-        state
+        self.0.poll_next()
     }
 }
 

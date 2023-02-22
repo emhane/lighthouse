@@ -9,6 +9,7 @@ use fork_choice::{CountUnrealized, PayloadVerificationStatus};
 use futures::channel::{
     mpsc,
     mpsc::{TryRecvError, TrySendError},
+    oneshot::Canceled,
 };
 use kzg::Kzg;
 use slot_clock::SlotClock;
@@ -84,6 +85,10 @@ pub enum BlobError<E: EthSpec> {
     InconsistentFork,
     /// Verifying availability of a block failed.
     DataAvailabilityFailed(DataAvailabilityFailed<E>),
+    /// A blob for this index has already been seen.
+    BlobAlreadyExistsAtIndex(Arc<SignedBlobSidecar<E>>),
+    SendErrorOneshot(Arc<SignedBlobSidecar<E>>),
+    RecvErrorOneshot(Canceled),
 }
 
 #[derive(Debug)]
@@ -351,74 +356,82 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsBlock<T::EthSpe
                 data_availability_handle:  async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) },
             })
         };
-        let data_availability_handle =
-            if self.slot().epoch(T::EthSpec::slots_per_epoch()) >= data_availability_boundary {
-                let kzg_commitments = self.message().body().kzg_commitments();
-                let data_availability_handle = if kzg_commitments.is_empty() {
-                    // check that txns match with empty kzg-commitments
-                    verify_blobs(self.as_block(), VariableList::empty(), chain.kzg)?;
-                    async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) }
-                } else {
-                    let chain = chain.clone();
-                    let block = block.clone();
+        let data_availability_handle = if self.slot().epoch(T::EthSpec::slots_per_epoch())
+            >= data_availability_boundary
+        {
+            let kzg_commitments = self.message().body().kzg_commitments();
+            let data_availability_handle = if kzg_commitments.is_empty() {
+                // check that txns match with empty kzg-commitments
+                verify_blobs(self.as_block(), VariableList::empty(), chain.kzg)?;
+                async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) }
+            } else {
+                let chain = chain.clone();
+                let block = block.clone();
 
-                    let availability_handle = chain.task_executor.spwan_handle::<Result<
-                        AvailableBlock<T::EthSpec>,
-                        BlobError,
-                    >>(
-                        async move {
-                            let blobs = VariableList::<
-                                SignedBlobSidecar<T::EthSpec>,
-                                T::EthSpec::MaxBlobsPerBlock,
-                            >::with_capcity(
-                                T::EthSpec::MaxBlobsPerBlock
-                            );
-                            loop {
-                                match rx.try_recv() {
-                                    Ok(Some(blob)) => {
-                                        blobs.push(blob);
-                                        if blobs.len() == kzg_commitments.len() {
-                                            break;
-                                        }
+                let availability_handle = chain.task_executor.spwan_handle::<Result<
+                    AvailableBlock<T::EthSpec>,
+                    BlobError,
+                >>(
+                    async move {
+                        let blobs = VariableList::<
+                            SignedBlobSidecar<T::EthSpec>,
+                            T::EthSpec::MaxBlobsPerBlock,
+                        >::with_capcity(
+                            T::EthSpec::MaxBlobsPerBlock
+                        );
+                        loop {
+                            match rx.try_recv() {
+                                Ok(Some((blob, tx))) => {
+                                    if blobs.iter().find(|existing_blob| {
+                                        existing_blob.blob_index() == blob.blob_index()
+                                    }) {
+                                        tx.send(Err(BlobError::BlobAlreadyExistsAtIndex(blob)))?;
+                                    } else {
+                                        tx.send(()).map_err(|e| BlobError::SendErrorOneshot(e))?;
                                     }
-                                    Ok(None) => {
+                                    blobs.push(blob);
+                                    if blobs.len() == kzg_commitments.len() {
                                         break;
                                     }
-                                    Err(e) => {
-                                        return BlobError::DataAvailabilityFailed(block, blobs, e)
-                                    }
+                                }
+                                Ok(None) => {
+                                    break;
+                                }
+                                Err(e) => {
+                                    return BlobError::DataAvailabilityFailed(block, blobs, e)
                                 }
                             }
-                            let kzg_handle = chain
-                                .task_executor
-                                .spawn_blocking_handle::<Result<(), BlobError>>(
-                                    move || {
-                                        verify_blobs(&block, blobs, chain.kzg).map_err(|e| {
-                                            BlobError::DataAvailabilityFailed(block, blobs, e)
-                                        })
-                                    },
-                                    &format!("verify_blobs_{block_root}"),
-                                );
-                            kzg_handle
-                                .await
-                                .map_err(|e| BlobError::DataAvailabilityFailed(block, blobs, e))?;
-                            chain.pending_blobs_tx.remove(&block_root);
-                            Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
-                                block, blobs,
-                            )))
-                        },
-                        format!("data_availability_block_{block_root}"),
-                    );
+                        }
+                        let kzg_handle = chain
+                            .task_executor
+                            .spawn_blocking_handle::<Result<(), BlobError>>(
+                                move || {
+                                    verify_blobs(&block, blobs, chain.kzg).map_err(|e| {
+                                        BlobError::DataAvailabilityFailed(block, blobs, e)
+                                    })
+                                },
+                                &format!("verify_blobs_{block_root}"),
+                            );
+                        kzg_handle
+                            .await
+                            .map_err(|e| BlobError::DataAvailabilityFailed(block, blobs, e))?;
+                        chain.pending_blobs_tx.remove(&block_root);
+                        Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
+                            block, blobs,
+                        )))
+                    },
+                    format!("data_availability_block_{block_root}"),
+                );
 
-                    tokio::time::timeout(
-                        Duration::from_secs(AVAILABILITY_PENDING_CACHE_ITEM_TIMEOUT),
-                        availability_handle,
-                    )
-                };
-                data_availability_handle
-            } else {
-                async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) }
+                tokio::time::timeout(
+                    Duration::from_secs(AVAILABILITY_PENDING_CACHE_ITEM_TIMEOUT),
+                    availability_handle,
+                )
             };
+            data_availability_handle
+        } else {
+            async { Ok(AvailableBlock(AvailableBlockInner::Block(block))) }
+        };
         Ok(AvailabilityPendingBlock {
             block,
             data_availability_handle,

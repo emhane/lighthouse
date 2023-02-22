@@ -654,20 +654,23 @@ impl<T: BeaconChainTypes> Worker<T> {
         blob: SignedBlobSidecar<T::EthSpec>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
-    ) -> Result<GossipVerifiedBlob<T>, BlobError> {
-        // todo(emhane): A blob at this index already exits, don't propagate blob, as according to
-        // spec (if kzg-verified or also not kzg-verified? only the former seems safe, hence todo
-        // links to singly kzg-verifying)
-        /*if let Some(entry) = self.chain.pending_blobs.get(blob.beacon_block_root()) {
-             if !entry
-             .blobs
-             .iter()
-             .find(|cache_blob| cached_blob.blob_index() == blob.blob_index())
-        {*/
-        return Ok(GossipVerifiedBlob(blob));
-        //}
-        //}
-        //return Err("a blob for this block at this index exists");
+    ) -> Result<(), BlobError> {
+        // todo(emhane): verify signature
+        let (tx, rx) = match self.chain.pending_blobs_tx_rx.get(block_root) {
+            Some(channel) => (channel.0, channel.1),
+            None => {
+                let (tx, rx) = mpsc::channel::<(
+                    GossipVerifiedBlob<T::EthSpec>,
+                    oneshot::Sender<Result<(), BlobError>>,
+                )>(DEFAULT_BLOB_CHANNEL_CAPACITY);
+                self.chain.pending_blocks_tx_rx.put(block_root, rx);
+                (tx, rx)
+            }
+        };
+        let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
+        let gossip_verified_blob = GossipVerifiedBlob(Arc::new(blob));
+        tx.send((gossip_verified_blob, tx_oneshot))?;
+        rx_oneshot.await?;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -681,7 +684,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,
     ) {
-        if let Some(gossip_verified_blob) = self
+        if let Err(e) = self
             .process_gossip_unverified_blob(
                 message_id,
                 peer_id,
@@ -692,25 +695,11 @@ impl<T: BeaconChainTypes> Worker<T> {
             )
             .await
         {
-            let block_root = gossip_verified_block.block_root;
-
-            let tx = match self.chain.pending_blobs_tx.get(block_root) {
-                Some(tx) => tx,
-                None => {
-                    let (tx, rx) = mpsc::channel::<GossipVerifiedBlob<T::EthSpec>>(
-                        DEFUALT_BLOB_CHANNEL_CAPACITY,
-                    );
-                    self.chain.pending_blocks_rx.put(block_root, rx);
-                    tx
-                }
-            };
-            if let Err(e) = tx.try_send(gossip_verified_blob).await {
-                error!(
-                    self.log, "Failed to send blob on sender";
+            error!(
+                    self.log, "Failed to verify blob for gossip";
                     "block_root" => block_root,
-                    "error" => e,
-                );
-            }
+                    "error" => e
+            );
         }
     }
 
