@@ -245,8 +245,7 @@ fn verify_data_availability<T: EthSpec, Bs: AsBlobSidecar<T>>(
         block_root,
         kzg_commitments,
         blob_sidecars,
-    )
-    .map_err(BlobError::KzgError)?
+    )?
     {
         return Err(BlobError::InvalidKzgProof);
     }
