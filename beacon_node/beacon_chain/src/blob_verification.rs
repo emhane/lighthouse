@@ -324,8 +324,8 @@ impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> IntoAvailabilityPendingB
 }
 
 pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> {
-    /// Takes a receiver as param, on which the availability-pending block receives kzg-verified
-    /// blobs.
+    /// Wraps a block in an [`AvailabilityPendingBlock`] with a [`DataAvailabilityHandle`] to
+    /// receive blobs from the network and kzg-verify them.
     fn into_availablilty_pending_block(
         self: B,
         block_root: Hash256,
@@ -583,7 +583,7 @@ pub trait AsSignedBlock<E: EthSpec> {
 }
 
 macro_rules! impl_as_block_fn {
-    ($fn_name: ident, $return_type: ty, $(.$field: ident)*) => {
+    ($fn_name: ident, $return_type: ty, $(.$field: tt)*) => {
         fn $fn_name(&self) -> $return_type {
             self$(.$field)*.$fn_name()
         }
@@ -591,7 +591,7 @@ macro_rules! impl_as_block_fn {
 }
 
 macro_rules! impl_as_block {
-    ($type: ty, $($generic: ident: $trait: ident$(<$generic_two: ident>)*,)+ $(.$field: ident)*) => {
+    ($type: ty, $($generic: ident: $trait: ident$(<$generic_two: ident>)*,)+ $(.$field: tt)*) => {
         impl<$($generic: $trait$(<$generic_two>)*,)+> AsSignedBlock<E> for $type {
             impl_as_block_fn!(slot, Slot, $(.$field)*);
             impl_as_block_fn!(epoch, Epoch, $(.$field)*);
