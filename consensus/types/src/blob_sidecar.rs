@@ -31,7 +31,7 @@ pub struct BlobSidecar<T: EthSpec> {
     pub proposer_index: u64,
     pub block_parent_root: Hash256,
     pub blob_index: u64,
-    pub blobs: Blob<T>,
+    pub blob: Blob<T>,
     pub kzg_aggregated_proof: KzgProof,
 }
 
@@ -72,5 +72,9 @@ impl<T: EthSpec> SignedBlobSidecar<T> {
     #[allow(clippy::integer_arithmetic)]
     pub fn max_size() -> usize {
         <SignedBlobSidecar<T> as Encode>::ssz_fixed_len()
+    }
+
+    pub fn message(&self) -> &BlobSidecar<T> {
+        &self.message
     }
 }

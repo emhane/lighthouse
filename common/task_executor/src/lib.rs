@@ -268,6 +268,18 @@ impl TaskExecutor {
         }
     }
 
+    pub fn spawn_handle_mock<R: Send + 'static>(
+        &self,
+        result: R,
+    ) -> Option<tokio::task::JoinHandle<Option<R>>> {
+        if let Some(handle) = self.handle() {
+            Some(handle.spawn(async { Some(result) }))
+        } else {
+            debug!(self.log, "Couldn't spawn task. Runtime shutting down");
+            None
+        }
+    }
+
     /// Spawn a blocking task on a dedicated tokio thread pool wrapped in an exit future returning
     /// a join handle to the future.
     /// If the runtime doesn't exist, this will return None.

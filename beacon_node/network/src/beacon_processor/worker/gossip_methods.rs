@@ -17,6 +17,7 @@ use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerAction, PeerI
 use slog::{crit, debug, error, info, trace, warn};
 use slot_clock::SlotClock;
 use ssz::Encode;
+use std::collections::hash_map::Entry;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
 use types::{
@@ -662,7 +663,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                 let (tx, rx) = mpsc::channel::<(
                     GossipVerifiedBlob<T::EthSpec>,
                     oneshot::Sender<Result<(), BlobError>>,
-                )>(DEFAULT_BLOB_CHANNEL_CAPACITY);
+                )>(T::EthSpec::max_blobs_per_block());
                 self.chain.pending_blocks_rx.put(block_root, rx);
                 (tx, rx)
             }
@@ -671,18 +672,49 @@ impl<T: BeaconChainTypes> Worker<T> {
         let gossip_verified_blob = GossipVerifiedBlob(Arc::new(blob));
         tx.send((gossip_verified_blob, tx_oneshot))
             .map_err(|e| DataAvailabilityFailure::Block(None, VariableList::new(blob), e));
-        match rx_oneshot.await {
-            Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
-                // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
-                Ok(())
+        match self.chain.chain_pending_blocks_rx.entry(block_root) {
+            Entry::Occupied(e) => {
+                // if the block didn't come yet do the index filtering here
+                loop {
+                    match e.get().try_next() {
+                        Ok(Some((blob, tx))) => {
+                            if blobs.iter().find(|existing_blob| {
+                                existing_blob.blob_index() == blob.blob_index()
+                            }) {
+                                // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+                            }
+                        }
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(e) => {
+                            return Err(DataAvailabilityFailure::Block(
+                                None,
+                                VariableList::new(blobs),
+                                e,
+                            ))
+                        }
+                    }
+                }
             }
-            Err(e) => Err(DataAvailabilityFailure::Block(
-                None,
-                VariableList::new(blobs),
-                e,
-            )),
-            Ok(()) => Ok(()),
+            Entry::Vacant(..) => {
+                match rx_oneshot.await {
+                    Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
+                        // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+                        Ok(())
+                    }
+                    Err(e) => {
+                        return Err(DataAvailabilityFailure::Block(
+                            None,
+                            VariableList::new(blobs),
+                            e,
+                        ))
+                    }
+                    Ok(()) => {}
+                }
+            }
         }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -847,6 +879,9 @@ impl<T: BeaconChainTypes> Worker<T> {
                 }
 
                 verified_block
+            }
+            Err(BlockError::DataAvailabilityFailure(bloc, blobs, e)) => {
+                // todo(emhane): deal with failure
             }
             Err(BlockError::ParentUnknown(block)) => {
                 debug!(

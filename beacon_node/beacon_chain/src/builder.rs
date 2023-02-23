@@ -932,16 +932,16 @@ where
                 loop {
                     tokio::select! {
                         executed_block = rx => {
-                            pending_blocks.push(executed_block.unwrap_or_clone());
+                            pending_blocks.push(executed_block);
                         }
-                        Some(Err(block, e)) = pending_blocks => {
+                        Some(Err(block, blobs, e)) = pending_blocks => {
                             // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
                         }
                         Some(Ok((available_block, executed_block))) = pending_blocks => {
                             chain.spawn_blocking_handle(
                                 move || {
                                     chain.import_block_from_pending_availability_cache(
-                                        Arc::new(executed_block)
+                                        executed_block
                                     )
                                 },
                                 "import_block_from_peding_availability_cache_handle",

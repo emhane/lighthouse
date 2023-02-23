@@ -9,7 +9,7 @@ use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
     AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock,
-    IntoWrappedAvailabilityPendingBlock,
+    IntoAvailabilityPendingBlock, IntoWrappedAvailabilityPendingBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -73,14 +73,13 @@ use fork_choice::{
     AttestationFromBlock, ExecutionStatus, ForkChoice, ForkchoiceUpdateParameters,
     InvalidationOperation, PayloadVerificationStatus, ResetPayloadStatuses,
 };
-use futures::prelude::stream::futures_unordered::FuturesUnordered;
+use futures::prelude::stream::{futures_unordered::FuturesUnordered, Stream};
 use futures::{
     channel::mpsc::{Receiver, Sender},
-    Stream,
+    channel::oneshot,
 };
 use itertools::process_results;
 use itertools::Itertools;
-use lru::LruCache;
 use operation_pool::{AttestationRef, OperationPool, PersistedOperationPool};
 use parking_lot::{Mutex, RwLock};
 use proto_array::{CountUnrealizedFull, DoNotReOrg, ProposerHeadError};
@@ -180,10 +179,6 @@ pub const INVALID_FINALIZED_MERGE_TRANSITION_BLOCK_SHUTDOWN_REASON: &str =
 /// blocks. Note that, when a block arrives it removes its receiver from the cache and then, if
 /// the block is successfully made available the matching sender is removed.
 pub const DEFAULT_PENDING_AVAILABILITY_CHANNELS: usize = 20;
-
-/// The next blob that comes to claim an index of a block that has already been claimed by a blob
-/// gets filtered out in processing the blob for re-gossip.
-pub const DEFAULT_BLOB_CHANNEL_CAPACITY: usize = EthSpec::MaxBlobsPerBlock;
 
 /// Defines the behaviour when a block/block-root for a skipped slot is requested.
 pub enum WhenSlotSkipped {
@@ -449,10 +444,22 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub pending_availability_cache_tx: Sender<ExecutedBlock<T::EthSpec>>,
     /// Borrow channel handles to send a blob that arrived over network to its block and listen
     /// for error.
-    pub pending_blobs_tx: LruCache<Hash256, Sender<Arc<SignedBlobSidecar<T::EthSpec>>>>,
+    pub pending_blobs_tx: HashMap<
+        Hash256,
+        Sender<(
+            Arc<SignedBlobSidecar<T::EthSpec>>,
+            oneshot::Sender<Result<(), BlobError<T::EthSpec>>>,
+        )>,
+    >,
     /// Remove channel handles to include in availability-pending block when block arrives over
     /// network, to receive blobs and return error.
-    pub pending_blocks_rx: LruCache<Hash256, Receiver<Arc<SignedBlobSidecar<T::EthSpec>>>>,
+    pub pending_blocks_rx: HashMap<
+        Hash256,
+        Receiver<(
+            Arc<SignedBlobSidecar<T::EthSpec>>,
+            oneshot::Sender<Result<(), BlobError<T::EthSpec>>>,
+        )>,
+    >,
 }
 
 #[derive(Default)]
@@ -2676,14 +2683,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     pub async fn verify_block_for_gossip(
         self: &Arc<Self>,
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
-    ) -> Result<
-        GossipVerifiedBlock<
-            T,
-            Arc<SignedBeaconBlock<T::EthSpec>>,
-            Arc<SignedBeaconBlock<T::EthSpec>>,
-        >,
-        BlockError<T::EthSpec>,
-    > {
+    ) -> Result<GossipVerifiedBlock<T, Arc<SignedBeaconBlock<T::EthSpec>>>, BlockError<T::EthSpec>>
+    {
         let chain = self.clone();
         self.task_executor
             .clone()
@@ -2720,8 +2721,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 "payload_verification_handle",
             )
             .ok_or(BeaconChainError::RuntimeShutdown)?
-            .await
-            .map_err(BeaconChainError::TokioJoin)?
+            .await?
     }
 
     /// Returns `Ok(block_root)` if the given `unverified_block` was successfully verified and
@@ -2738,8 +2738,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     /// verification.
     pub async fn process_block<
-        A: AsSignedBlock<T>,
-        B: IntoWrappedAvailabilityPendingBlock<T, A>,
+        A: AsSignedBlock<T::EthSpec>,
+        I: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
+        B: IntoWrappedAvailabilityPendingBlock<T> + IntoExecutionPendingBlock<T, I>,
     >(
         self: &Arc<Self>,
         block_root: Hash256,
@@ -2754,7 +2755,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         metrics::inc_counter(&metrics::BLOCK_PROCESSING_REQUESTS);
 
         let pending_availability_block =
-            unverified_block.into_availability_pending_block(block_root, &self);
+            unverified_block.wrap_into_availability_pending_block(block_root, &self);
         let slot = pending_availability_block.slot();
 
         // A small closure to group the verification and import errors.
@@ -2818,7 +2819,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
     /// Verifies the execution payload and imports the block if it is available (all
     /// kzg-verification has completed).
-    async fn import_execution_pending_block<B: TryInto<AvailableBlock<T>>>(
+    async fn import_execution_pending_block<
+        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
+    >(
         self: Arc<Self>,
         execution_pending_block: ExecutionPendingBlock<T, B>,
         count_unrealized: CountUnrealized,
@@ -2907,12 +2910,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     confirmed_state_roots,
                     payload_verification_status,
                     count_unrealized,
-                    parent_block,
+                    parent_block: Arc::new(parent_block),
                     parent_eth1_finalization_data,
                     consensus_context,
                 };
-                self.pending_availability_cache_tx
-                    .send(Arc::new(executed_block));
+                self.pending_availability_cache_tx.send(executed_block);
                 Err(BlobError::PendingAvailability)
             }
             Err(e) => Err(e),
@@ -2922,7 +2924,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Imports a block to fork choice that wasn't available at first attempt to import it.
     pub fn import_block_from_pending_availability_cache(
         &self,
-        executed_block: Arc<ExecutedBlock<AvailableBlock<T::EthSpec>>>,
+        executed_block: ExecutedBlock<T::EthSpec>,
     ) -> Result<Hash256, BlockError<T::EthSpec>> {
         let ExecutedBlock {
             block_root,
@@ -2934,7 +2936,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             parent_block,
             parent_eth1_finalization_data,
             consensus_context,
-        } = executed_block.unwrap_or_clone();
+        } = executed_block;
         self.import_block(
             block.try_into()?,
             block_root,
@@ -4786,7 +4788,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 blobs,
                 kzg_aggregated_proof,
             };
-            kzg_utils::validate_blobs_sidecar(
+            kzg_utils::validate_blob_sidecars(
                 &kzg,
                 slot,
                 beacon_block_root,

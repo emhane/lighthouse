@@ -10,7 +10,7 @@ pub const DEFAULT_ETH1_CACHE_SIZE: usize = 5;
 
 /// These fields are named the same as the corresponding fields in the `BeaconState`
 /// as this structure stores these values from the `BeaconState` at a `Checkpoint`
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Eth1FinalizationData {
     pub eth1_data: Eth1Data,
     pub eth1_deposit_index: u64,
