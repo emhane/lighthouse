@@ -1,5 +1,5 @@
 use crate::beacon_chain::{
-    CanonicalHead, PendingAvailabilityCache, BEACON_CHAIN_DB_KEY, DEFAULT_BLOB_CHANNEL_CAPACITY,
+    AvailabilityPendingCache, CanonicalHead, BEACON_CHAIN_DB_KEY, DEFAULT_BLOB_CHANNEL_CAPACITY,
     DEFAULT_PENDING_AVAILABILITY_CHANNELS, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
 };
 use crate::blob_cache::BlobCache;
@@ -928,11 +928,11 @@ where
         let chain = beacon_chain.clone();
         beacon_chain.task_executor.spawn_without_exit(
             async move {
-                let pending_blocks = PendingAvailabilityCache::<T::EthSpec>::default();
+                let pending_blocks = AvailabilityPendingCache::<EthSpec>::default();
                 loop {
                     tokio::select! {
-                        block = rx => {
-                            pending_blocks.push(block);
+                        executed_block = rx => {
+                            pending_blocks.push(executed_block.unwrap_or_clone());
                         }
                         Some(Err(block, e)) = pending_blocks => {
                             // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
@@ -941,7 +941,7 @@ where
                             chain.spawn_blocking_handle(
                                 move || {
                                     chain.import_block_from_pending_availability_cache(
-                                        executed_block
+                                        Arc::new(executed_block)
                                     )
                                 },
                                 "import_block_from_peding_availability_cache_handle",

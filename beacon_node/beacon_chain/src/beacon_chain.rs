@@ -9,7 +9,7 @@ use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
     AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock,
-    IntoAvailabilityPendingBlock,
+    IntoWrappedAvailabilityPendingBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -456,9 +456,9 @@ pub struct BeaconChain<T: BeaconChainTypes> {
 }
 
 #[derive(Default)]
-pub struct PendingAvailabilityCache<T: EthSpec>(FuturesUnordered<ExecutedBlock<T>>);
+pub struct AvailabilityPendingCache<T: EthSpec>(FuturesUnordered<ExecutedBlock<T>>);
 
-impl<T: EthSpec> Stream for PendingAvailabilityCache<T> {
+impl<T: EthSpec> Stream for AvailabilityPendingCache<T> {
     type Item = Result<ExecutedBlock<T>, BlobError<T>>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.0.is_empty() {
@@ -468,7 +468,7 @@ impl<T: EthSpec> Stream for PendingAvailabilityCache<T> {
     }
 }
 
-impl<T: EthSpec> PendingAvailabilityCache<T> {
+impl<T: EthSpec> AvailabilityPendingCache<T> {
     pub fn push(&mut self, block: ExecutedBlock<T>) {
         self.0.push(block)
     }
@@ -2675,8 +2675,15 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     pub async fn verify_block_for_gossip(
         self: &Arc<Self>,
-        block: BlockWrapper<T::EthSpec>,
-    ) -> Result<GossipVerifiedBlock<T, B>, BlockError<T::EthSpec>> {
+        block: Arc<SignedBeaconBlock<T::EthSpec>>,
+    ) -> Result<
+        GossipVerifiedBlock<
+            T,
+            Arc<SignedBeaconBlock<T::EthSpec>>,
+            Arc<SignedBeaconBlock<T::EthSpec>>,
+        >,
+        BlockError<T::EthSpec>,
+    > {
         let chain = self.clone();
         self.task_executor
             .clone()
@@ -2730,7 +2737,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     ///
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     /// verification.
-    pub async fn process_block<A: AsSignedBlock<T>, B: IntoAvailabilityPendingBlock<T, A>>(
+    pub async fn process_block<
+        A: AsSignedBlock<T>,
+        B: IntoWrappedAvailabilityPendingBlock<T, A>,
+    >(
         self: &Arc<Self>,
         block_root: Hash256,
         unverified_block: B,
@@ -2745,6 +2755,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
         let pending_availability_block =
             unverified_block.into_availability_pending_block(block_root, &self);
+        let slot = pending_availability_block.slot();
 
         // A small closure to group the verification and import errors.
         let chain = self.clone();
@@ -2900,7 +2911,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     parent_eth1_finalization_data,
                     consensus_context,
                 };
-                self.pending_availability_cache_tx.send(executed_block);
+                self.pending_availability_cache_tx
+                    .send(Arc::new(executed_block));
                 Err(BlobError::PendingAvailability)
             }
             Err(e) => Err(e),
@@ -2910,7 +2922,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Imports a block to fork choice that wasn't available at first attempt to import it.
     pub fn import_block_from_pending_availability_cache(
         &self,
-        executed_block: ExecutedBlock<AvailableBlock<T::EthSpec>>,
+        executed_block: Arc<ExecutedBlock<AvailableBlock<T::EthSpec>>>,
     ) -> Result<Hash256, BlockError<T::EthSpec>> {
         let ExecutedBlock {
             block_root,
@@ -2922,7 +2934,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             parent_block,
             parent_eth1_finalization_data,
             consensus_context,
-        } = executed_block;
+        } = executed_block.unwrap_or_clone();
         self.import_block(
             block.try_into()?,
             block_root,

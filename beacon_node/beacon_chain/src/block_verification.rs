@@ -45,7 +45,7 @@
 //! ```
 use crate::blob_verification::{
     AsSignedBlock, AvailabilityPendingBlock, AvailableBlock, BlobError, BlockWrapper,
-    DataAvailabilityFailure, IntoBlockWrapper,
+    DataAvailabilityFailure, IntoAvailabilityPendingBlock,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
 use crate::execution_payload::{
@@ -608,7 +608,11 @@ pub fn signature_verify_chain_segment<T: BeaconChainTypes, B: AsSignedBlock<T::E
 /// the p2p network.
 #[derive(Derivative)]
 #[derivative(Debug(bound = "T: BeaconChainTypes"))]
-pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> {
+pub struct GossipVerifiedBlock<
+    T: BeaconChainTypes,
+    A: AsSignedBlock<T::EthSpec> + Send + Sync,
+    B: IntoAvailabilityPendingBlock<T::EthSpec, A>,
+> {
     pub block: B,
     pub block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
@@ -617,14 +621,18 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>
 
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
-pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> {
+pub struct SignatureVerifiedBlock<
+    T: BeaconChainTypes,
+    A: AsSignedBlock<T::EthSpec> + Send + Sync,
+    B: IntoAvailabilityPendingBlock<T::EthSpec, A>,
+> {
     block: B,
     block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
-impl_as_signed_block!(SignatureVerifiedBlock<E, A>, E: EthSpec, A: AsSignedBlock<E>, .block);
+impl_as_signed_block!(SignatureVerifiedBlock<E, A, B>, E: EthSpec, A: AsSignedBlock<E,> + Send + Sync, B: IntoAvailabilityPendingBlock<E, A,>, .block);
 
 /// Used to await the result of executing payload with a remote EE.
 type PayloadVerificationHandle<E> =
@@ -1646,7 +1654,10 @@ fn check_block_against_finalized_slot<T: BeaconChainTypes>(
 /// ## Warning
 ///
 /// Taking a lock on the `chain.canonical_head.fork_choice` might cause a deadlock here.
-pub fn check_block_is_finalized_descendant<T: BeaconChainTypes, B: IntoBlockWrapper<T::EthSpec>>(
+pub fn check_block_is_finalized_descendant<
+    T: BeaconChainTypes,
+    B: Into<BlockWrapper<T::EthSpec>>,
+>(
     chain: &BeaconChain<T>,
     fork_choice: &BeaconForkChoice<T>,
     block: B,
