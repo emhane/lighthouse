@@ -541,7 +541,11 @@ fn process_block_slash_info<T: BeaconChainTypes>(
 ///
 /// The given `chain_segment` must contain only blocks from the same epoch, otherwise an error
 /// will be returned.
-pub fn signature_verify_chain_segment<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>>(
+pub fn signature_verify_chain_segment<
+    T: BeaconChainTypes,
+    A: AsSignedBlock<T::EthSpec> + Send + Sync,
+    B: IntoAvailabilityPendingBlock<T::EthSpec, A>,
+>(
     mut chain_segment: Vec<(Hash256, BlockWrapper<T::EthSpec>)>,
     chain: &BeaconChain<T>,
 ) -> Result<Vec<SignatureVerifiedBlock<T, B>>, BlockError<T::EthSpec>> {
@@ -695,7 +699,12 @@ pub trait IntoExecutionPendingBlock<T: BeaconChainTypes, B: AsSignedBlock<T::Eth
     fn block(&self) -> &SignedBeaconBlock<T::EthSpec>;
 }
 
-impl<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>> GossipVerifiedBlock<T, B> {
+impl<
+        T: BeaconChainTypes,
+        A: AsSignedBlock<T::EthSpec> + Send + Sync,
+        B: IntoAvailabilityPendingBlock<T::EthSpec, A>,
+    > GossipVerifiedBlock<T, A, B>
+{
     /// Instantiates `Self`, a wrapper that indicates the given `block` is safe to be re-gossiped
     /// on the p2p network.
     ///

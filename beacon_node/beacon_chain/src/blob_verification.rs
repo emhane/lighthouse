@@ -684,7 +684,6 @@ macro_rules! impl_as_signed_block {
     };
 }
 
-impl_as_signed_block!(Arc<SignedBeaconBlock<E>>, E: EthSpec,);
 impl_as_signed_block!(GossipVerifiedBlock<E, A, B>, E: EthSpec, A: AsSignedBlock<E,> + Send + Sync, B: IntoAvailabilityPendingBlock<E, A,>, .block);
 impl_as_signed_block!(AvailabilityPendingBlock<E>, E: EthSpec, .block);
 impl_as_signed_block!(
@@ -701,3 +700,18 @@ impl_as_signed_block!(
     Self::Block,
     Self::BlockAndBlobs
 );
+
+impl<E: EthSpec> AsSignedBlock<E> for Arc<SignedBeaconBlock<E>> {
+    impl_as_signed_block_fn!(slot, Slot,);
+    impl_as_signed_block_fn!(epoch, Epoch,);
+    impl_as_signed_block_fn!(parent_root, Hash256,);
+    impl_as_signed_block_fn!(state_root, Hash256,);
+    impl_as_signed_block_fn!(signed_block_header, SignedBeaconBlockHeader,);
+    impl_as_signed_block_fn!(message, BeaconBlockRef<E>,);
+    fn as_block(&self) -> &SignedBeaconBlock<E> {
+        &*self
+    }
+    fn block_cloned(&self) -> Arc<SignedBeaconBlock<E>> {
+        self.clone()
+    }
+}
