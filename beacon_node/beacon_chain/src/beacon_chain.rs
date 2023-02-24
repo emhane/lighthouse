@@ -442,8 +442,9 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub blob_cache: BlobCache<T::EthSpec>,
     pub kzg: Option<Arc<kzg::Kzg>>,
     pub pending_availability_cache_tx: Sender<ExecutedBlock<T::EthSpec>>,
-    /// Borrow a channel handle to send a blob that arrived over network to its block and listen
-    /// for error.
+    /// Clone a sender to send a blob that arrived over network to its block and listen
+    /// for error. Remove a receiver to include in an availability-pending block when the
+    /// block arrives over network.
     pub pending_blocks_tx_rx: RwLock<
         HashMap<
             Hash256,
@@ -459,18 +460,6 @@ pub struct BeaconChain<T: BeaconChainTypes> {
                     )>,
                 >,
             ),
-        >,
-    >,
-    /// Remove a channel handle to include in an availability-pending block when the block arrives
-    /// over network, so it can receive blobs and notify the sender of success or
-    /// [`BlobError::BlobAlreadyExistsAtIndex`].
-    pub pending_blocks_rx: RwLock<
-        HashMap<
-            Hash256,
-            Receiver<(
-                Arc<SignedBlobSidecar<T::EthSpec>>,
-                Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
-            )>,
         >,
     >,
 }

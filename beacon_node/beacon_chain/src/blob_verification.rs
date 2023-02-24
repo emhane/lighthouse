@@ -28,6 +28,7 @@ use std::{
     task::{Context, Poll},
 };
 use task_executor::JoinHandle;
+use tokio::time::Duration;
 use types::signed_beacon_block::BlobReconstructionError;
 use types::{
     BeaconBlockRef, BeaconStateError, EthSpec, Hash256, KzgCommitment, SignedBeaconBlock,
@@ -35,7 +36,7 @@ use types::{
 };
 use types::{BeaconState, Blob, Epoch, ExecPayload, KzgProof};
 
-pub const DEFAULT_DATA_AVAILABILITY_TIMEOUT: Duration = tokio::time::Duration::from_secs(10);
+pub const DEFAULT_DATA_AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub enum BlobError<E: EthSpec> {
@@ -325,7 +326,11 @@ impl<
             payload_verification_handle,
         } = self;
         // If this block is already wraps an availability-pending block nothing changes.
-        let availability_pending_block = block.into_availability_pending_block(block_root, chain);
+        let availability_pending_block = block.into_availability_pending_block(
+            block_root,
+            chain,
+            VariableList::with_capacity(T::EthSpec::max_blobs_per_block()),
+        );
         ExecutionPendingBlock {
             block: availability_pending_block,
             block_root,
@@ -363,7 +368,7 @@ impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T> for ExecutedBlo
                 self.block = availability_pending_block;
                 self
             }
-            Ok(_) | Err(_) => self, // other error variant won't occur
+            Ok(_) | Err(_) => self, // other error variant, with block without payload verification metadata, won't occur
         }
     }
 }
@@ -388,7 +393,11 @@ impl<
             parent,
             consensus_context,
         } = self;
-        let availability_pending_block = block.into_availability_pending_block(block_root, chain);
+        let availability_pending_block = block.into_availability_pending_block(
+            block_root,
+            chain,
+            VariableList::with_capacity(T::EthSpec::max_blobs_per_block()),
+        );
         SignatureVerifiedBlock {
             block: availability_pending_block,
             block_root,
@@ -418,7 +427,11 @@ impl<
             parent,
             consensus_context,
         } = self;
-        let availability_pending_block = block.into_availability_pending_block(block_root, chain);
+        let availability_pending_block = block.into_availability_pending_block(
+            block_root,
+            chain,
+            VariableList::with_capacity(T::EthSpec::max_blobs_per_block()),
+        );
         GossipVerifiedBlock {
             block: availability_pending_block,
             block_root,
@@ -440,7 +453,7 @@ pub trait IntoWrappedAvailabilityPendingBlock<T: BeaconChainTypes> {
 }
 
 impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for AvailabilityPendingBlock<T::EthSpec> {
-    fn into_availablilty_pending_block(
+    fn into_availability_pending_block(
         self,
         block_root: Hash256,
         chain: &BeaconChain<T>,
@@ -469,7 +482,7 @@ impl<E: EthSpec> NotYetAvailabilityPending for Arc<SignedBeaconBlock<E>> {}
 /// failure returns the parts that have been gathered so far returned wrapped in a
 /// [`DataAvailabilityFailure::Block`] error variant.
 pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
-    fn into_availablilty_pending_block(
+    fn into_availability_pending_block(
         self,
         block_root: Hash256,
         chain: &BeaconChain<T>,
@@ -596,7 +609,7 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
 
                         let kzg_handle = chain.task_executor.spawn_blocking_handle(
                             move || {
-                                verify_blobs(&block, blobs, chain.kzg).map_err(e| {
+                                verify_blobs(&block, blobs, chain.kzg).map_err(|e| {
                                         DataAvailabilityFailure::Block(Some(block), blobs, e)
                                     })
                                 },
