@@ -44,8 +44,8 @@
 //!
 //! ```
 use crate::blob_verification::{
-    AsSignedBlock,  AvailabilityPendingBlock, AvailableBlock, BlobError,
-    BlockWrapper, DataAvailabilityFailure, IntoAvailabilityPendingBlock,
+    AsSignedBlock, AvailabilityPendingBlock, AvailableBlock, BlobError, BlockWrapper,
+    DataAvailabilityFailure, IntoAvailabilityPendingBlock,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
 use crate::execution_payload::{

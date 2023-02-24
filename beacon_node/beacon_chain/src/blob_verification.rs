@@ -313,6 +313,9 @@ impl<
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> Self::Block {
+        if self.is_availability_pending() {
+            return self;
+        }
         let ExecutionPendingBlock {
             block,
             block_root,
@@ -358,11 +361,7 @@ impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T> for ExecutedBlo
 
 impl<
         T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T>
-            + AsSignedBlock<T::EthSpec>
-            + Send
-            + Sync
-            + NotYetAvailabilityPending,
+        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
     > IntoWrappedAvailabilityPendingBlock<T> for SignatureVerifiedBlock<T, B>
 {
     type Block = SignatureVerifiedBlock<T, B>;
@@ -392,11 +391,7 @@ impl<
 
 impl<
         T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T>
-            + AsSignedBlock<T::EthSpec>
-            + Send
-            + Sync
-            + NotYetAvailabilityPending,
+        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
     > IntoWrappedAvailabilityPendingBlock<T> for GossipVerifiedBlock<T, B>
 {
     type Block = GossipVerifiedBlock<T, B>;
@@ -433,6 +428,16 @@ pub trait IntoWrappedAvailabilityPendingBlock<T: BeaconChainTypes> {
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> Self::Block;
+}
+
+impl<T: BeaconChainTypes> IntoAvailabilityPendingBlock<T> for AvailabilityPendingBlock<T::EthSpec> {
+    fn into_availablilty_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &BeaconChain<T>,
+    ) -> Result<AvailabilityPendingBlock<T::EthSpec>, DataAvailabilityFailure<T::EthSpec>> {
+        Ok(self)
+    }
 }
 
 impl<
