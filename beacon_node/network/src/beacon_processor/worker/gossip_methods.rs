@@ -662,10 +662,10 @@ impl<T: BeaconChainTypes> Worker<T> {
         let tx = match channels.entry(block_root) {
             Entry::Occupied(mut e) => {
                 match *e.get_mut() {
-                    // if the block didn't come yet to pick up its receiver, borrow it and do the
-                    // index filtering here, while locking the `pending_blocks_tx_rx` to make sure
-                    // no other blob workers do the same. if the block comes before all its blobs,
-                    // this will not have to be done.
+                    // A fallback solution to filtering, if the block didn't come yet to pick up
+                    // its receiver, borrow it and do the index filtering here, while locking the
+                    // `pending_blocks_tx_rx` to make sure no other blob workers do the same. if
+                    // the block comes before all its blobs, this will not have to be done.
                     (tx, Some(rx)) => {
                         let mut seen_blobs = Vec::with_capacity(T::EthSpec::max_blobs_per_block());
                         loop {

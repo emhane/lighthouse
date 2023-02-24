@@ -103,8 +103,6 @@ pub enum BlobError<E: EthSpec> {
     SendBlob(TrySendError<Arc<SignedBlobSidecar<E>>>),
     /// Spawning threads failed.
     TaskExecutor,
-    /// Mismatch between blob channel handles for a block.
-    ChannelHandleMismatch,
 }
 
 #[derive(Debug, Clone)]
