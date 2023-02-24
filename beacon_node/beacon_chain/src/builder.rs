@@ -1,6 +1,6 @@
 use crate::beacon_chain::{
     AvailabilityPendingCache, CanonicalHead, BEACON_CHAIN_DB_KEY, DEFAULT_BLOB_CHANNEL_CAPACITY,
-    DEFAULT_PENDING_AVAILABILITY_CHANNELS, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
+    DEFAULT_PENDING_AVAILABILITY_BLOCKS, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
 };
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::ExecutedBlock;
@@ -861,8 +861,7 @@ where
             blob_cache: BlobCache::default(),
             kzg,
             pending_availability_cache_tx,
-            pending_blocks_rx: LruCache::new(DEFAULT_PENDING_AVAILABILITY_CHANNELS),
-            pending_blobs_tx: LruCache::new(DEFAULT_PENDING_AVAILABILITY_CHANNELS),
+            pending_blocks_tx_rx: RwLock::new(HashMap::new()),
         };
 
         let head = beacon_chain.head_snapshot();

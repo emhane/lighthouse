@@ -18,6 +18,7 @@ use slog::{crit, debug, error, info, trace, warn};
 use slot_clock::SlotClock;
 use ssz::Encode;
 use std::collections::hash_map::Entry;
+use std::f32::consts::E;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
 use types::{
@@ -652,69 +653,69 @@ impl<T: BeaconChainTypes> Worker<T> {
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        blob: SignedBlobSidecar<T::EthSpec>,
+        blob: Arc<SignedBlobSidecar<T::EthSpec>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
-    ) -> Result<(), BlobError> {
+    ) -> Result<(), BlobError<T::EthSpec>> {
         // todo(emhane): verify signature
-        let tx = match self.chain.pending_blobs_tx.get(block_root) {
-            Some(tx) => tx,
-            None => {
-                let (tx, rx) = mpsc::channel::<(
-                    GossipVerifiedBlob<T::EthSpec>,
-                    oneshot::Sender<Result<(), BlobError>>,
-                )>(T::EthSpec::max_blobs_per_block());
-                self.chain.pending_blocks_rx.put(block_root, rx);
-                (tx, rx)
-            }
-        };
-        let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
-        let gossip_verified_blob = GossipVerifiedBlob(Arc::new(blob));
-        tx.send((gossip_verified_blob, tx_oneshot))
-            .map_err(|e| DataAvailabilityFailure::Block(None, VariableList::new(blob), e));
-        match self.chain.chain_pending_blocks_rx.entry(block_root) {
-            Entry::Occupied(e) => {
-                // if the block didn't come yet do the index filtering here
-                loop {
-                    match e.get().try_next() {
-                        Ok(Some((blob, tx))) => {
-                            if blobs.iter().find(|existing_blob| {
-                                existing_blob.blob_index() == blob.blob_index()
-                            }) {
-                                // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+        let channels = self.chain.pending_blocks_tx_rx.write();
+        let tx = match channels.entry(block_root) {
+            Entry::Occupied(mut e) => {
+                match *e.get_mut() {
+                    // if the block didn't come yet to pick up its receiver, borrow it and do the
+                    // index filtering here, while locking the `pending_blocks_tx_rx` to make sure
+                    // no other blob workers do the same. if the block comes before all its blobs,
+                    // this will not have to be done.
+                    (tx, Some(rx)) => {
+                        let mut seen_blobs = Vec::with_capacity(T::EthSpec::max_blobs_per_block());
+                        loop {
+                            match rx.try_next() {
+                                Ok(Some((blob, _))) => {
+                                    seen_blobs.push(blob);
+                                }
+                                Ok(None) => {
+                                    // and put the blobs back when done
+                                    if seen_blobs.iter().find(|existing_blob| {
+                                        existing_blob.blob_index()
+                                            == gossip_verified_blob.blob_index()
+                                    }) {
+                                        // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+                                    }
+                                    for blob in seen_blobs {
+                                        tx.send((blob, None));
+                                    }
+                                    return Ok(());
+                                }
+                                Err(e) => return Err(e),
                             }
                         }
-                        Ok(None) => {
-                            break;
-                        }
-                        Err(e) => {
-                            return Err(DataAvailabilityFailure::Block(
-                                None,
-                                VariableList::new(blobs),
-                                e,
-                            ))
-                        }
                     }
+                    // the receiver has already been picked up by the block
+                    (tx, None) => tx.clone(),
                 }
             }
-            Entry::Vacant(..) => {
-                match rx_oneshot.await {
-                    Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
-                        // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
-                        Ok(())
-                    }
-                    Err(e) => {
-                        return Err(DataAvailabilityFailure::Block(
-                            None,
-                            VariableList::new(blobs),
-                            e,
-                        ))
-                    }
-                    Ok(()) => {}
-                }
+            Entry::Vacant(e) => {
+                let (tx, rx) = mpsc::channel::<(
+                    Arc<SignedBlobSidecar<T::EthSpec>>,
+                    Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
+                )>(T::EthSpec::max_blobs_per_block());
+                *channels.insert(block_root, (tx.clone(), Some(rx)));
+                tx
             }
+        };
+        drop(channel);
+        // the block has picked up the blob receiver, let it do the index filtering and wait for
+        // success notification
+        let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
+        tx.send((gossip_verified_blob, Some(oneshot_tx)));
+        match rx_oneshot.await {
+            Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
+                // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+                Ok(())
+            }
+            Err(e) => Err(e),
+            Ok(()) => Ok(()),
         }
-        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -723,7 +724,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        block: SignedBeaconBlock<T::EthSpec>,
+        block: Arc<SignedBeaconBlock<T::EthSpec>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,

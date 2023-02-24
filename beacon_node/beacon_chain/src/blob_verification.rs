@@ -1,8 +1,6 @@
-use crate::beacon_chain::{
-    BeaconChain, BeaconChainTypes, DEFAULT_BLOB_CHANNEL_CAPACITY, MAXIMUM_GOSSIP_CLOCK_DISPARITY,
-};
+use crate::beacon_chain::{BeaconChain, BeaconChainTypes, MAXIMUM_GOSSIP_CLOCK_DISPARITY};
 use crate::block_verification::{
-    ExecutionPendingBlock, GossipVerifiedBlock, SignatureVerifiedBlock,
+    BlockError, ExecutionPendingBlock, GossipVerifiedBlock, SignatureVerifiedBlock,
 };
 use crate::{eth1_finalization_cache::Eth1FinalizationData, kzg_utils, BeaconChainError};
 use derivative::Derivative;
@@ -17,6 +15,7 @@ use futures::{
     future::Future,
 };
 use kzg::Kzg;
+use slog::error;
 use slot_clock::SlotClock;
 use ssz_types::VariableList;
 use state_processing::{
@@ -29,13 +28,14 @@ use std::{
     task::{Context, Poll},
 };
 use task_executor::JoinHandle;
-use tokio::time::{error::Elapsed as TimedOut, Duration};
 use types::signed_beacon_block::BlobReconstructionError;
 use types::{
     BeaconBlockRef, BeaconStateError, EthSpec, Hash256, KzgCommitment, SignedBeaconBlock,
     SignedBeaconBlockHeader, SignedBlobSidecar, Slot, Transactions,
 };
 use types::{BeaconState, Blob, Epoch, ExecPayload, KzgProof};
+
+pub const DEFAULT_DATA_AVAILABILITY_TIMEOUT: Duration = tokio::time::Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub enum BlobError<E: EthSpec> {
@@ -90,18 +90,20 @@ pub enum BlobError<E: EthSpec> {
     InconsistentFork,
     /// A blob for this index has already been seen.
     BlobAlreadyExistsAtIndex(Arc<SignedBlobSidecar<E>>),
-    /// Error using one shot sender.
+    /// Error using oneshot sender to notify blob sender.
     SendOneshot(Arc<SignedBlobSidecar<E>>),
-    /// Error using one shot receiver.
+    /// Error using oneshot receiver to get green light from blob receiver.
     RecvOneshot(Canceled),
-    /// Awaiting blobs over network timed out.
-    TimedOut(TimedOut),
-    /// Receiving an available block from pending-availability blobs cache failed.
+    /// Awaiting data availability timed out.
+    TimedOut(Duration),
+    /// Receiving a blob failed.
     RecvBlob(TryRecvError),
-    /// Sending an available block from pending-availability blobs cache failed.
-    SendBlob(TrySendError<E>),
+    /// Sending a blob failed.
+    SendBlob(TrySendError<Arc<SignedBlobSidecar<E>>>),
     /// Spawning threads failed.
     TaskExecutor,
+    /// Mismatch between blob channel handles for a block.
+    ChannelHandleMismatch,
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +139,6 @@ impl_wrap_type_in_variant!(<E: EthSpec,>, kzg::Error, BlobError<E>, Self::KzgErr
 impl_wrap_type_in_variant!(<E: EthSpec,>, BeaconChainError, BlobError<E>, Self::BeaconChainError);
 impl_wrap_type_in_variant!(<E: EthSpec,>, Arc<SignedBlobSidecar<E>>, BlobError<E>, Self::BlobAlreadyExistsAtIndex);
 impl_wrap_type_in_variant!(<E: EthSpec,>, Canceled, BlobError<E>, Self::RecvOneshot);
-impl_wrap_type_in_variant!(<E: EthSpec,>, TimedOut, BlobError<E>, Self::TimedOut);
 impl_wrap_type_in_variant!(<E: EthSpec,>, TryRecvError, BlobError<E>, Self::RecvBlob);
 impl_wrap_type_in_variant!(<E: EthSpec,>, TrySendError<E>, BlobError<E>, Self::SendBlob);
 
@@ -207,16 +208,13 @@ fn verify_blobs<E: EthSpec, B: AsSignedBlock<E>, Bs: AsBlobSidecar<E>>(
         .body()
         .blob_kzg_commitments()
         .map_err(|_| BlobError::KzgCommitmentMissing)?;
-    if kzg_commitments.len() != blobs.len() {
-        return Err(BlobError::PendingAvailability);
-    }
     let transactions = block
         .message()
         .body()
         .execution_payload_eip4844()
         .map(|payload| payload.transactions())
-        .map_err(|_| BlobError::TransactionsMissing)?
-        .ok_or(BlobError::TransactionsMissing)?;
+        .transpose()
+        .ok_or(BlobError::TransactionsMissing)??;
     verify_data_availability::<E, Bs>(
         blobs,
         kzg_commitments,
@@ -348,14 +346,25 @@ impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T> for ExecutedBlo
         block_root: Hash256,
         chain: &BeaconChain<T>,
     ) -> Self::Block {
-        // Make a new data availability handle. Will use existing channel to receive blobs if one
-        // exists.
-        let availability_pending_block = self
-            .block
-            .block_cloned()
-            .into_availability_pending_block(block_root, chain);
-        self.block = availability_pending_block;
-        self
+        // Make a new data availability handle with the blobs returned by data availability
+        // failure. May for example be useful if data availability times out.
+        let available_block = self.block.try_into();
+        match available_block {
+            Err(DataAvailabilityFailure::ExecutedBlock(_, blobs, e)) => {
+                error!(
+                    chain.log, "Data Availability Failed";
+                    "block_root" => block_root,
+                    "error" => e
+                );
+                let availability_pending_block = self
+                    .block
+                    .block_cloned()
+                    .into_availability_pending_block(block_root, chain, blobs);
+                self.block = availability_pending_block;
+                self
+            }
+            Ok(_) | Err(_) => self, // other error variant won't occur
+        }
     }
 }
 
@@ -455,28 +464,17 @@ pub trait NotYetAvailabilityPending {}
 impl<E: EthSpec> NotYetAvailabilityPending for Arc<SignedBeaconBlock<E>> {}
 
 /// Consumes a block and wraps it in an [`AvailabilityPendingBlock`] with a
-/// [`DataAvailabilityHandle`] to receive blobs on from the network and kzg-verify them, returning
-/// an [`AvailableBlock`] on success, and on failure returns the parts that have been gathered so
-/// far wrapped in a [`DataAvailabilityFailure::Block`] error variant upon failure.
+/// [`DataAvailabilityHandle`] to receive blobs on from the network and kzg-verify them. Calling
+/// `try_into` on an [`AvailabilityPendingBlock`] returns an [`AvailableBlock`] on success, and on
+/// failure returns the parts that have been gathered so far returned wrapped in a
+/// [`DataAvailabilityFailure::Block`] error variant.
 pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
     fn into_availablilty_pending_block(
         self,
         block_root: Hash256,
         chain: &BeaconChain<T>,
+        blobs: VariableList<Arc<SignedBlobSidecar<T::EthSpec>>, T::EthSpec::MaxBlobsPerBlock>, // allow for restarting with blobs obtained in error.
     ) -> Result<AvailabilityPendingBlock<T::EthSpec>, DataAvailabilityFailure<T::EthSpec>> {
-        // If a blob receiver exists for the block root, some blobs have already arrived.
-        let existing_rx = chain.pending_blocks_rx.remove(&block_root);
-        let rx = match existing_rx {
-            Some(rx) => rx,
-            None => {
-                let (tx, rx) = mpsc::channel::<(
-                    Arc<SignedBlobSidecar<T::EthSpec>>,
-                    oneshot::Sender<Result<(), BlobError<T::EthSpec>>>,
-                )>(T::EthSpec::max_blobs_per_block());
-                chain.pending_blobs_tx.insert(block_root, tx);
-                rx
-            }
-        };
         let block = self.block_cloned();
         let Some(data_availability_boundary) = chain.data_availability_boundary() else {
             let data_availability_handle = chain.task_executor.spawn_handle_mock(Ok(AvailableBlock(AvailableBlockInner::Block(block)))).ok_or(DataAvailabilityFailure::Block(None, VariableList::empty(), BlobError::TaskExecutor))?;
@@ -506,99 +504,132 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
             } else {
                 let chain = chain.clone();
                 let block = block.clone();
+                let time_out = tokio::time::sleep(DEFAULT_DATA_AVAILABILITY_TIMEOUT);
 
                 chain
-                    .task_executor
-                    .spawn_handle(
-                        async move {
-                            let blobs = VariableList::<
-                                Arc<SignedBlobSidecar<T::EthSpec>>,
-                                T::EthSpec::MaxBlobsPerBlock,
-                            >::with_capcity(
-                                T::EthSpec::max_blobs_per_block()
-                            );
+                        .task_executor
+                        .spawn_handle(
+                            async move {
+                                tokio::pin!(time_out);
 
-                            loop {
-                                match rx.try_next() {
-                                    Ok(Some((blob, tx))) => {
-                                        if blobs.iter().find(|existing_blob| {
-                                            existing_blob.blob_index() == blob.blob_index()
-                                        }) {
-                                            tx.send(Err(BlobError::BlobAlreadyExistsAtIndex(blob)))
-                                                .map_err(|e| {
-                                                    e.map_err(|e| {
-                                                        DataAvailabilityFailure::Block(
+                                let channels = chain.pending_blocks_tx_rx.write();
+                                // Remove the blocks blob receiver and put back sender.
+                                let (tx, rx) = match channels.remove(block_root) {
+                                    Some((tx, Some(rx))) => (tx, rx),
+                                    None => mpsc::channel::<(
+                                        Arc<SignedBlobSidecar<T::EthSpec>>,
+                                        Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
+                                    )>(
+                                        T::EthSpec::max_blobs_per_block()
+                                    ),
+                                };
+                                *channels.insert(block_root, (tx, None));
+                                drop(channels);
+                                loop {
+                                tokio::select!{
+                                    blob_received = rx.poll_next() => {
+                                        match blob_received {
+                                            Ok(Some((blob, notify_success_tx))) => {
+                                                if let Some(tx) = notify_success_tx {
+                                                    // index filtering hasn't already occured for 
+                                                    // blob
+                                                    if blobs.iter().find(|existing_blob|
+                                                        existing_blob.blob_index() == blob.blob_index())
+                                                    {
+                                                        tx.send(Err(
+                                                            BlobError::BlobAlreadyExistsAtIndex(
+                                                                blob
+                                                            ),
+                                                        ))
+                                                        .map_err(|e| { e.map_err(|e| {
+                                                            DataAvailabilityFailure::Block(
+                                                            Some(block),
+                                                            blobs,
+                                                            BlobError::BlobAlreadyExistsAtIndex(
+                                                                blob,
+                                                            ),
+                                                        )})})?;
+                                                    } else {
+                                                        tx.send(Ok(())).map_err(|e| {
+                                                            e.map_err(|e| {
+                                                            DataAvailabilityFailure::Block(
                                                             Some(block),
                                                             blobs,
                                                             e,
-                                                        )
-                                                    })
-                                                })?;
-                                        } else {
-                                            tx.send(Ok(())).map_err(|e| {
-                                                e.map_err(|e| {
-                                                    DataAvailabilityFailure::Block(
-                                                        Some(block),
-                                                        blobs,
-                                                        e,
-                                                    )
-                                                })
-                                            })?;
+                                                        )})
+                                                    })?;
+                                                }
+                                            }
+                                            blobs.push(blob);
+                                            if blobs.len() == kzg_commitments.len() {
+                                                break;
+                                            }
                                         }
-                                        blobs.push(blob);
-                                        if blobs.len() == kzg_commitments.len() {
+                                        Ok(Some((blob, None))) => {
+                                            // blob has already been filtered on index before 
+                                            // block arrived
+                                            blobs.push(blob);
+                                            if blobs.len() == kzg_commitments.len() {
+                                                break;
+                                            }
+                                        }
+                                        Ok(None) => {
                                             break;
                                         }
-                                    }
-                                    Ok(None) => {
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        return Err(DataAvailabilityFailure::Block(
-                                            Some(block),
-                                            blobs,
-                                            e.into(),
-                                        ))
+                                        Err(e) => {
+                                            return Err(DataAvailabilityFailure::Block(                                                    Some(block),
+                                                blobs,
+                                                e.into(),
+                                            ))
+                                        }
                                     }
                                 }
+                                _ = &mut time_out => {
+                                    return Err(DataAvailabilityFailure::Block(
+                                        Some(block),
+                                        blobs,
+                                        BlobError::TimedOut(DEFAULT_DATA_AVAILABILITY_TIMEOUT),
+                                    ))
+                                }
                             }
+                        }
 
-                            let kzg_handle = chain.task_executor.spawn_blocking_handle(
-                                move || {
-                                    verify_blobs(&block, blobs, chain.kzg).map_err(|e| {
+                        let kzg_handle = chain.task_executor.spawn_blocking_handle(
+                            move || {
+                                verify_blobs(&block, blobs, chain.kzg).map_err(e| {
                                         DataAvailabilityFailure::Block(Some(block), blobs, e)
                                     })
                                 },
-                                &format!("verify_blobs_{block_root}"),
-                            );
-                            kzg_handle
-                                .ok_or(DataAvailabilityFailure::Block(
+                            &format!("verify_blobs_{block_root}"),
+                        );
+                        kzg_handle
+                            .ok_or(DataAvailabilityFailure::Block(
+                                Some(block),
+                                VariableList::empty(),
+                                BlobError::TaskExecutor,
+                            ))?
+                            .await
+                            .map_err(|e| {
+                                DataAvailabilityFailure::Block(
                                     Some(block),
-                                    VariableList::empty(),
+                                    blobs,
                                     BlobError::TaskExecutor,
-                                ))?
-                                .await
-                                .map_err(|e| {
-                                    DataAvailabilityFailure::Block(
-                                        Some(block),
-                                        blobs,
-                                        BlobError::TaskExecutor,
-                                    )
-                                })?;
+                                 )
+                                }
+                            )?;
+                        chain.pending_blocks_tx_rx.remove(&block_root);
 
-                            chain.pending_blobs_tx.remove(&block_root);
-
-                            Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
-                                block, blobs,
-                            )))
-                        },
-                        &format!("data_availability_block_{block_root}"),
-                    )
-                    .ok_or(DataAvailabilityFailure::Block(
-                        Some(block),
-                        VariableList::empty(),
-                        BlobError::TaskExecutor,
-                    ))
+                        Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
+                            block, blobs,
+                        )))
+                    },
+                    &format!("data_availability_block_{block_root}"),
+                )
+                .ok_or(DataAvailabilityFailure::Block(
+                    Some(block),
+                    VariableList::empty(),
+                    BlobError::TaskExecutor,
+                ))
             }
         } else {
             chain
@@ -609,7 +640,7 @@ pub trait IntoAvailabilityPendingBlock<T: BeaconChainTypes> {
                     VariableList::empty(),
                     BlobError::TaskExecutor,
                 ))
-        }?;
+        };
         Ok(AvailabilityPendingBlock {
             block,
             data_availability_handle,
@@ -676,13 +707,73 @@ impl<E: EthSpec> AvailableBlock<E> {
     }
 }
 
-impl<E: EthSpec> TryInto<AvailableBlock<E>> for &AvailabilityPendingBlock<E> {
-    type Error = BlobError<E>;
-    fn try_into(self) -> Result<AvailableBlock<E>, Self::Error> {
+pub trait TryIntoAvailableBlock<T: BeaconChainTypes> {
+    fn try_into(
+        &mut self,
+        chain: &BeaconChain<T>,
+    ) -> Result<AvailableBlock<T::EthSpec>, BlockError<T::EthSpec>>;
+}
+
+impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<T::EthSpec> {
+    fn try_into(
+        &mut self,
+        chain: &BeaconChain<T>,
+    ) -> Result<AvailableBlock<T::EthSpec>, BlockError<T::EthSpec>> {
         match self.poll() {
-            Poll::Pending => Err(BlobError::PendingAvailability),
+            Poll::Pending => Err(BlockError::BlobValidation(BlobError::PendingAvailability)),
             Poll::Ready(Ok(available_block)) => Ok(available_block),
-            Poll::Ready(Err(e)) => Err(e),
+            Poll::Ready(Err(DataAvailabilityFailure::Block(block, blobs, e))) => {
+                let channels = chain.pending_blocks_tx_rx.write();
+                match *channels.remove(block.block_root()) {
+                    Some((_, Some(rx))) => {
+                        loop {
+                            match rx.try_next() {
+                                Ok(Some((blob, _))) => {
+                                    blobs.push(blob); // rescue any blobs that may have been sent on the channel.
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    error!(
+                                        chain.log, "Error while adding blobs to Data Availability Failure";
+                                        "block_root" => block.root(),
+                                        "error" => e
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    None | Some((_, None)) => {}
+                }
+                drop(channels);
+                DataAvailabilityFailure::Block(block, blobs, e)
+            }
+            Poll::Ready(Err(DataAvailabilityFailure::ExecutedBlock(block, blobs, e))) => {
+                let channels = chain.pending_blocks_tx_rx.write();
+                match *channels.remove(block.block_root()) {
+                    Some((_, Some(rx))) => {
+                        loop {
+                            match rx.try_next() {
+                                Ok(Some((blob, _))) => {
+                                    blobs.push(blob); // rescue any blobs that may have been sent on the channel.
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    error!(
+                                        chain.log, "Error while adding blobs to Data Availability Failure";
+                                        "block_root" => block.root(),
+                                        "error" => e
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    None | Some((_, None)) => {}
+                }
+                drop(channels);
+                DataAvailabilityFailure::ExecutedBlock(block, blobs, e)
+            }
         }
     }
 }

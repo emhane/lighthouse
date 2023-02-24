@@ -178,7 +178,7 @@ pub const INVALID_FINALIZED_MERGE_TRANSITION_BLOCK_SHUTDOWN_REASON: &str =
 /// The number of channels to hold open at a time to send blobs arriving over the network to their
 /// blocks. Note that, when a block arrives it removes its receiver from the cache and then, if
 /// the block is successfully made available the matching sender is removed.
-pub const DEFAULT_PENDING_AVAILABILITY_CHANNELS: usize = 20;
+pub const DEFAULT_PENDING_AVAILABILITY_BLOCKS: usize = 20;
 
 /// Defines the behaviour when a block/block-root for a skipped slot is requested.
 pub enum WhenSlotSkipped {
@@ -442,23 +442,36 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub blob_cache: BlobCache<T::EthSpec>,
     pub kzg: Option<Arc<kzg::Kzg>>,
     pub pending_availability_cache_tx: Sender<ExecutedBlock<T::EthSpec>>,
-    /// Borrow channel handles to send a blob that arrived over network to its block and listen
+    /// Borrow a channel handle to send a blob that arrived over network to its block and listen
     /// for error.
-    pub pending_blobs_tx: HashMap<
-        Hash256,
-        Sender<(
-            Arc<SignedBlobSidecar<T::EthSpec>>,
-            oneshot::Sender<Result<(), BlobError<T::EthSpec>>>,
-        )>,
+    pub pending_blocks_tx_rx: RwLock<
+        HashMap<
+            Hash256,
+            (
+                Sender<(
+                    Arc<SignedBlobSidecar<T::EthSpec>>,
+                    Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
+                )>,
+                Option<
+                    Receiver<(
+                        Arc<SignedBlobSidecar<T::EthSpec>>,
+                        Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
+                    )>,
+                >,
+            ),
+        >,
     >,
-    /// Remove channel handles to include in availability-pending block when block arrives over
-    /// network, to receive blobs and return error.
-    pub pending_blocks_rx: HashMap<
-        Hash256,
-        Receiver<(
-            Arc<SignedBlobSidecar<T::EthSpec>>,
-            oneshot::Sender<Result<(), BlobError<T::EthSpec>>>,
-        )>,
+    /// Remove a channel handle to include in an availability-pending block when the block arrives
+    /// over network, so it can receive blobs and notify the sender of success or
+    /// [`BlobError::BlobAlreadyExistsAtIndex`].
+    pub pending_blocks_rx: RwLock<
+        HashMap<
+            Hash256,
+            Receiver<(
+                Arc<SignedBlobSidecar<T::EthSpec>>,
+                Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
+            )>,
+        >,
     >,
 }
 
