@@ -2821,9 +2821,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
     /// Verifies the execution payload and imports the block if it is available (all
     /// kzg-verification has completed).
-    async fn import_execution_pending_block<
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    >(
+    async fn import_execution_pending_block<B: IntoAvailabilityPendingBlock<T>>(
         self: Arc<Self>,
         execution_pending_block: ExecutionPendingBlock<T, B>,
         count_unrealized: CountUnrealized,

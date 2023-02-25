@@ -544,10 +544,7 @@ fn process_block_slash_info<T: BeaconChainTypes>(
 ///
 /// The given `chain_segment` must contain only blocks from the same epoch, otherwise an error
 /// will be returned.
-pub fn signature_verify_chain_segment<
-    T: BeaconChainTypes,
-    B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
->(
+pub fn signature_verify_chain_segment<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>>(
     mut chain_segment: Vec<(Hash256, BlockWrapper<T::EthSpec>)>,
     chain: &BeaconChain<T>,
 ) -> Result<Vec<SignatureVerifiedBlock<T, B>>, BlockError<T::EthSpec>> {
@@ -614,10 +611,7 @@ pub fn signature_verify_chain_segment<
 /// the p2p network.
 #[derive(Derivative)]
 #[derivative(Debug(bound = "T: BeaconChainTypes"))]
-pub struct GossipVerifiedBlock<
-    T: BeaconChainTypes,
-    B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-> {
+pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> {
     pub block: B,
     pub block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
@@ -626,17 +620,14 @@ pub struct GossipVerifiedBlock<
 
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
-pub struct SignatureVerifiedBlock<
-    T: BeaconChainTypes,
-    B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-> {
+pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> {
     block: B,
     block_root: Hash256,
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
-impl_as_signed_block!(SignatureVerifiedBlock<T, B>, .block, T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T,> + SignedBlock<E,> + Send + Sync,);
+impl_as_signed_block!(SignatureVerifiedBlock<T, B>, .block, T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T,> + AsSignedBlock<E,> + Send + Sync);
 
 /// Used to await the result of executing payload with a remote EE.
 type PayloadVerificationHandle<E> =
@@ -654,10 +645,7 @@ type PayloadVerificationHandle<E> =
 /// Note: a `ExecutionPendingBlock` is not _forever_ valid to be imported, it may later become invalid
 /// due to finality or some other event. A `ExecutionPendingBlock` should be imported into the
 /// `BeaconChain` immediately after it is instantiated.
-pub struct ExecutionPendingBlock<
-    T: BeaconChainTypes,
-    B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-> {
+pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> {
     pub block: B,
     pub block_root: Hash256,
     pub state: BeaconState<T::EthSpec>,
@@ -671,10 +659,8 @@ pub struct ExecutionPendingBlock<
 /// Implemented on types that can be converted into a `ExecutionPendingBlock`.
 ///
 /// Used to allow functions to accept blocks at various stages of verification.
-pub trait IntoExecutionPendingBlock<
-    T: BeaconChainTypes,
-    B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
->: Sized
+pub trait IntoExecutionPendingBlock<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>>:
+    Sized
 {
     fn into_execution_pending_block(
         self,
@@ -704,11 +690,7 @@ pub trait IntoExecutionPendingBlock<
     fn block(&self) -> &SignedBeaconBlock<T::EthSpec>;
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > GossipVerifiedBlock<T, B>
-{
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> GossipVerifiedBlock<T, B> {
     /// Instantiates `Self`, a wrapper that indicates the given `block` is safe to be re-gossiped
     /// on the p2p network.
     ///
@@ -945,10 +927,8 @@ impl<
     }
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > IntoExecutionPendingBlock<T, B> for GossipVerifiedBlock<T, B>
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> IntoExecutionPendingBlock<T, B>
+    for GossipVerifiedBlock<T, B>
 {
     /// Completes verification of the wrapped `block`.
     fn into_execution_pending_block_slashable(
@@ -971,11 +951,7 @@ impl<
     }
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > SignatureVerifiedBlock<T, B>
-{
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> SignatureVerifiedBlock<T, B> {
     /// Instantiates `Self`, a wrapper that indicates that all signatures (except the deposit
     /// signatures) are valid  (i.e., signed by the correct public keys).
     ///
@@ -1095,10 +1071,8 @@ impl<
     }
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > IntoExecutionPendingBlock<T, B> for SignatureVerifiedBlock<T, B>
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> IntoExecutionPendingBlock<T, B>
+    for SignatureVerifiedBlock<T, B>
 {
     /// Completes verification of the wrapped `block`.
     fn into_execution_pending_block_slashable(
@@ -1131,10 +1105,8 @@ impl<
     }
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > IntoExecutionPendingBlock<T, B> for Arc<SignedBeaconBlock<T::EthSpec>>
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> IntoExecutionPendingBlock<T, B>
+    for Arc<SignedBeaconBlock<T::EthSpec>>
 {
     /// Verifies the `SignedBeaconBlock` by first transforming it into a `SignatureVerifiedBlock`
     /// and then using that implementation of `IntoExecutionPendingBlock` to complete verification.
@@ -1157,10 +1129,8 @@ impl<
     }
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > IntoExecutionPendingBlock<T, B> for AvailabilityPendingBlock<T::EthSpec>
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> IntoExecutionPendingBlock<T, B>
+    for AvailabilityPendingBlock<T::EthSpec>
 {
     /// Verifies the `SignedBeaconBlock` by first transforming it into a `SignatureVerifiedBlock`
     /// and then using that implementation of `IntoExecutionPendingBlock` to complete verification.
@@ -1183,10 +1153,8 @@ impl<
     }
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > IntoExecutionPendingBlock<T, B> for AvailableBlock<T::EthSpec>
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> IntoExecutionPendingBlock<T, B>
+    for AvailableBlock<T::EthSpec>
 {
     /// Verifies the `SignedBeaconBlock` by first transforming it into a `SignatureVerifiedBlock`
     /// and then using that implementation of `IntoExecutionPendingBlock` to complete verification.
@@ -1209,11 +1177,7 @@ impl<
     }
 }
 
-impl<
-        T: BeaconChainTypes,
-        B: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
-    > ExecutionPendingBlock<T, B>
-{
+impl<T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T>> ExecutionPendingBlock<T, B> {
     /// Instantiates `Self`, a wrapper that indicates that the given `block` is fully valid. See
     /// the struct-level documentation for more information.
     ///

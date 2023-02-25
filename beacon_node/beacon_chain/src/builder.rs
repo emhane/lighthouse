@@ -1,5 +1,5 @@
 use crate::beacon_chain::{
-    AvailabilityPendingCache, CanonicalHead, BEACON_CHAIN_DB_KEY, DEFAULT_BLOB_CHANNEL_CAPACITY,
+    AvailabilityPendingCache, CanonicalHead, BEACON_CHAIN_DB_KEY,
     DEFAULT_PENDING_AVAILABILITY_BLOCKS, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
 };
 use crate::blob_cache::BlobCache;
@@ -33,6 +33,7 @@ use proto_array::ReOrgThreshold;
 use slasher::Slasher;
 use slog::{crit, error, info, Logger};
 use slot_clock::{SlotClock, TestingSlotClock};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
@@ -789,7 +790,7 @@ where
         let canonical_head = CanonicalHead::new(fork_choice, Arc::new(head_snapshot));
 
         let (rx, pending_availability_cache_tx) =
-            mpsc::channel::<ExecutedBlock<EthSpec>>(DEFAULT_BLOB_CHANNEL_CAPACITY);
+            mpsc::channel::<ExecutedBlock<TEthSpec>>(TEthSpec::max_blobs_per_block());
 
         let beacon_chain = BeaconChain {
             spec: self.spec,
@@ -861,7 +862,9 @@ where
             blob_cache: BlobCache::default(),
             kzg,
             pending_availability_cache_tx,
-            pending_blocks_tx_rx: RwLock::new(HashMap::new()),
+            pending_blocks_tx_rx: RwLock::new(HashMap::new_with_capacity(
+                DEFAULT_PENDING_AVAILABILITY_BLOCKS,
+            )),
         };
 
         let head = beacon_chain.head_snapshot();
