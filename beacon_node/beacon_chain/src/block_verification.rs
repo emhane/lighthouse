@@ -627,7 +627,7 @@ pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: IntoAvailabilityPendin
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
-impl_as_signed_block!(SignatureVerifiedBlock<T, B>, .block, T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T,> + AsSignedBlock<E,> + Send + Sync);
+impl_as_signed_block!(SignatureVerifiedBlock<T, B>, .block, T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T,>);
 
 /// Used to await the result of executing payload with a remote EE.
 type PayloadVerificationHandle<E> =

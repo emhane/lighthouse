@@ -9,7 +9,7 @@ use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
     AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock,
-    IntoAvailabilityPendingBlock, IntoWrappedAvailabilityPendingBlock,
+    IntoAvailabilityPendingBlock, IntoWrappedAvailabilityPendingBlock, TryIntoAvailableBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -2938,7 +2938,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             consensus_context,
         } = executed_block;
         self.import_block(
-            block.try_into()?,
+            block.try_into_available_block(self)?,
             block_root,
             state,
             confirmed_state_roots,
@@ -2950,7 +2950,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         )
     }
 
-    /// Accepts a fully-verified block and imports it into the chain without performing any
+    /// Accepts a fully-available block and imports it into the chain without performing any
     /// additional verification.
     ///
     /// An error is returned if the block was unable to be imported. It may be partially imported

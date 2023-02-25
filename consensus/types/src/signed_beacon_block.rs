@@ -226,6 +226,11 @@ impl<E: EthSpec, Payload: AbstractExecPayload<E>> SignedBeaconBlock<E, Payload> 
         }
     }
 
+    /// Convenience accessor for the block's block root.
+    pub fn block_root(&self) -> Hash256 {
+        self.message().body_root()
+    }
+
     /// Convenience accessor for the block's slot.
     pub fn slot(&self) -> Slot {
         self.message().slot()

@@ -674,13 +674,14 @@ impl<T: BeaconChainTypes> Worker<T> {
                                     seen_blobs.push(blob);
                                 }
                                 Ok(None) => {
-                                    // and put the blobs back when done
+                                    // index filtering
                                     if seen_blobs.iter().find(|existing_blob| {
                                         existing_blob.blob_index()
                                             == gossip_verified_blob.blob_index()
                                     }) {
                                         // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
                                     }
+                                    // and put the blobs back when done
                                     for blob in seen_blobs {
                                         tx.send((blob, None));
                                     }
@@ -699,7 +700,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                     Arc<SignedBlobSidecar<T::EthSpec>>,
                     Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
                 )>(T::EthSpec::max_blobs_per_block());
-                *channels.insert(block_root, (tx.clone(), Some(rx)));
+                channels.insert(block_root, (tx.clone(), Some(rx)));
                 tx
             }
         };

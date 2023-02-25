@@ -24,7 +24,7 @@ use crate::{
 use eth1::Config as Eth1Config;
 use execution_layer::ExecutionLayer;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
-use futures::channel::mpsc;
+use futures::{channel::mpsc, future::Future};
 use kzg::{Kzg, TrustedSetup};
 use lru::LruCache;
 use operation_pool::{OperationPool, PersistedOperationPool};
@@ -789,7 +789,7 @@ where
         let head_for_snapshot_cache = head_snapshot.clone();
         let canonical_head = CanonicalHead::new(fork_choice, Arc::new(head_snapshot));
 
-        let (rx, pending_availability_cache_tx) =
+        let (pending_availability_cache_tx, rx) =
             mpsc::channel::<ExecutedBlock<TEthSpec>>(TEthSpec::max_blobs_per_block());
 
         let beacon_chain = BeaconChain {
@@ -930,7 +930,7 @@ where
         let chain = beacon_chain.clone();
         beacon_chain.task_executor.spawn_without_exit(
             async move {
-                let pending_blocks = AvailabilityPendingCache::<EthSpec>::default();
+                let pending_blocks = AvailabilityPendingCache::<TEthSpec>::default();
                 loop {
                     tokio::select! {
                         executed_block = rx => {
@@ -948,7 +948,7 @@ where
                                 },
                                 "import_block_from_peding_availability_cache_handle",
                             )
-                            .await??;
+                            .await;
                         }
                     }
                 }
