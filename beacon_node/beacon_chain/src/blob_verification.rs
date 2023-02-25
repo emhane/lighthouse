@@ -13,7 +13,6 @@ use futures::{
         oneshot::Canceled,
     },
     future::Future,
-    stream::Stream,
 };
 use kzg::Kzg;
 use slog::error;
@@ -29,7 +28,10 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
-use tokio::{task::JoinHandle, time::Duration};
+use tokio::{
+    task::{JoinError, JoinHandle},
+    time::Duration,
+};
 use types::signed_beacon_block::BlobReconstructionError;
 use types::{
     BeaconBlockRef, BeaconStateError, EthSpec, Hash256, KzgCommitment, SignedBeaconBlock,
@@ -616,8 +618,6 @@ where
                                  )
                                 }
                             )?;
-                        chain.pending_blocks_tx_rx.remove(&block_root);
-
                         Ok(AvailableBlock(AvailableBlockInner::BlockAndBlobs(
                             block, blobs,
                         )))
@@ -653,10 +653,12 @@ pub struct AvailabilityPendingBlock<E: EthSpec> {
     data_availability_handle: DataAvailabilityHandle<E>,
 }
 
-impl<E: EthSpec> futures::future::Future for AvailabilityPendingBlock<E> {
-    type Output = Result<AvailableBlock<E>, BlobError<E>>;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.data_availability_handle.poll()
+impl<E: EthSpec> Future for AvailabilityPendingBlock<E> {
+    type Output = Result<Option<Result<AvailableBlock<E>, DataAvailabilityFailure<E>>>, JoinError>;
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let data_availability_handle = self.data_availability_handle;
+        tokio::pin!(data_availability_handle);
+        (&mut data_availability_handle).poll(_cx)
     }
 }
 
@@ -697,7 +699,7 @@ impl<E: EthSpec> AvailableBlock<E> {
         self,
     ) -> (
         Arc<SignedBeaconBlock<E>>,
-        Option<VariableList<SignedBlobSidecar<E>, E::MaxBlobsPerBlock>>,
+        Option<VariableList<Arc<SignedBlobSidecar<E>>, E::MaxBlobsPerBlock>>,
     ) {
         match self.0 {
             AvailableBlockInner::Block(block) => (block, None),
@@ -708,20 +710,28 @@ impl<E: EthSpec> AvailableBlock<E> {
 
 pub trait TryIntoAvailableBlock<T: BeaconChainTypes> {
     fn try_into_available_block(
-        &mut self,
+        self: Pin<&mut Self>,
         chain: &BeaconChain<T>,
     ) -> Result<AvailableBlock<T::EthSpec>, BlockError<T::EthSpec>>;
 }
 
 impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<T::EthSpec> {
     fn try_into_available_block(
-        &mut self,
+        self: Pin<&mut Self>,
         chain: &BeaconChain<T>,
     ) -> Result<AvailableBlock<T::EthSpec>, BlockError<T::EthSpec>> {
-        match self.poll() {
+        let _cx: &mut Context<'_>;
+        match self.poll(_cx) {
             Poll::Pending => Err(BlockError::BlobValidation(BlobError::PendingAvailability)),
-            Poll::Ready(Ok(available_block)) => Ok(available_block),
-            Poll::Ready(Err(DataAvailabilityFailure::Block(block, blobs, e))) => {
+            Poll::Ready(Ok(Some(Ok(available_block)))) => Ok(available_block),
+            Poll::Ready(Err(_)) | Poll::Ready(Err(None)) => Err(BlockError::DataAvailability(
+                DataAvailabilityFailure::Block(
+                    None,
+                    VariableList::empty(),
+                    BlobError::TaskExecutor,
+                ),
+            )),
+            Poll::Ready(Ok(Some(Err(DataAvailabilityFailure::Block(block, blobs, e))))) => {
                 let channels = chain.pending_blocks_tx_rx.write();
                 let block_root = match block {
                     Some(block) => block.block_root(),
@@ -760,7 +770,7 @@ impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<
                     DataAvailabilityFailure::Block(block, blobs, e),
                 ))
             }
-            Poll::Ready(Err(DataAvailabilityFailure::ExecutedBlock(block, blobs, e))) => {
+            Poll::Ready(Ok(Some(Err(DataAvailabilityFailure::ExecutedBlock(block, blobs, e))))) => {
                 let channels = chain.pending_blocks_tx_rx.write();
                 let block_root = block.block_root();
                 match channels.remove(&block_root) {
@@ -813,15 +823,27 @@ pub struct ExecutedBlock<E: EthSpec> {
 
 impl<E: EthSpec> Future for ExecutedBlock<E> {
     type Output = Result<Arc<ExecutedBlock<E>>, DataAvailabilityFailure<E>>;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let availability_state = self.block.poll();
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let block = self.block;
+        tokio::pin!(block);
+        let availability_state = (&mut block).poll(_cx);
         match availability_state {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(available_block)) => Poll::Ready(Ok(Arc::new(self.clone()))),
-            Poll::Ready(Err(DataAvailabilityFailure::Block(_, blobs, e))) => Poll::Ready(Err(
-                DataAvailabilityFailure::ExecutedBlock(Arc::new(self.clone()), blobs, e),
-            )),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Ready(Ok(Some(Okavailable_block))) => Poll::Ready(Ok(Arc::new(self.clone()))),
+            Poll::Ready(Ok(Some(Err(DataAvailabilityFailure::Block(_, blobs, e))))) => {
+                Poll::Ready(Err(DataAvailabilityFailure::ExecutedBlock(
+                    Arc::new(self.clone()),
+                    blobs,
+                    e,
+                )))
+            }
+            Poll::Ready(Err(_)) | Poll::Ready(Ok(None)) => {
+                Poll::Ready(Err(DataAvailabilityFailure::Block(
+                    None,
+                    VariableList::empty(),
+                    BlobError::TaskExecutor,
+                )))
+            }
         }
     }
 }
