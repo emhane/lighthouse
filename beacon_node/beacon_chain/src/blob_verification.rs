@@ -653,15 +653,6 @@ pub struct AvailabilityPendingBlock<E: EthSpec> {
     data_availability_handle: DataAvailabilityHandle<E>,
 }
 
-impl<E: EthSpec> Future for AvailabilityPendingBlock<E> {
-    type Output = Result<Option<Result<AvailableBlock<E>, DataAvailabilityFailure<E>>>, JoinError>;
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let data_availability_handle = self.data_availability_handle;
-        tokio::pin!(data_availability_handle);
-        (&mut data_availability_handle).poll(_cx)
-    }
-}
-
 /// Used to await blobs from the network.
 type DataAvailabilityHandle<E: EthSpec> =
     JoinHandle<Option<Result<AvailableBlock<E>, DataAvailabilityFailure<E>>>>;
@@ -710,14 +701,14 @@ impl<E: EthSpec> AvailableBlock<E> {
 
 pub trait TryIntoAvailableBlock<T: BeaconChainTypes> {
     fn try_into_available_block(
-        self: Pin<&mut Self>,
+        &self,
         chain: &BeaconChain<T>,
     ) -> Result<AvailableBlock<T::EthSpec>, BlockError<T::EthSpec>>;
 }
 
 impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<T::EthSpec> {
     fn try_into_available_block(
-        self: Pin<&mut Self>,
+        &self,
         chain: &BeaconChain<T>,
     ) -> Result<AvailableBlock<T::EthSpec>, BlockError<T::EthSpec>> {
         let _cx: &mut Context<'_>;
@@ -824,10 +815,9 @@ pub struct ExecutedBlock<E: EthSpec> {
 impl<E: EthSpec> Future for ExecutedBlock<E> {
     type Output = Result<Arc<ExecutedBlock<E>>, DataAvailabilityFailure<E>>;
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let block = self.block;
-        tokio::pin!(block);
-        let availability_state = (&mut block).poll(_cx);
-        match availability_state {
+        let data_availability_handle = self.block.data_availability_handle;
+        tokio::pin!(data_availability_handle);
+        match (&mut data_availability_handle).poll(_cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(Some(Okavailable_block))) => Poll::Ready(Ok(Arc::new(self.clone()))),
             Poll::Ready(Ok(Some(Err(DataAvailabilityFailure::Block(_, blobs, e))))) => {
