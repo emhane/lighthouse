@@ -568,7 +568,7 @@ where
                                         }
                                     }
                                 }
-                                _ = &mut time_out => {
+                                _ = time_out => {
                                     return Err(DataAvailabilityFailure::Block(
                                         Some(block),
                                         blobs,
@@ -696,7 +696,9 @@ impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<
         chain: &BeaconChain<T>,
     ) -> Result<AvailableBlock<T::EthSpec>, BlockError<T::EthSpec>> {
         let _cx: &mut Context<'_>;
-        match self.poll(_cx) {
+        let data_availability_handle = self.data_availability_handle;
+        tokio::pin!(data_availability_handle);
+        match data_availability_handle.poll(_cx) {
             Poll::Pending => Err(BlockError::BlobValidation(BlobError::PendingAvailability)),
             Poll::Ready(Ok(Some(Ok(available_block)))) => Ok(available_block),
             Poll::Ready(Err(_)) | Poll::Ready(Ok(None)) => Err(BlockError::DataAvailability(
