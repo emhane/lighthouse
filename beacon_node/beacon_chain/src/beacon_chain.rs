@@ -8,7 +8,7 @@ use crate::beacon_proposer_cache::compute_proposer_duties_from_head;
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
-    AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, ExecutedBlock,
+    AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, DataAvailabilityFailure, ExecutedBlock,
     IntoAvailabilityPendingBlock, IntoWrappedAvailabilityPendingBlock, TryIntoAvailableBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
@@ -74,6 +74,7 @@ use fork_choice::{
     InvalidationOperation, PayloadVerificationStatus, ResetPayloadStatuses,
 };
 use futures::prelude::stream::{futures_unordered::FuturesUnordered, Stream};
+use futures::stream::futures_unordered;
 use futures::{
     channel::mpsc::{Receiver, Sender},
     channel::oneshot,
@@ -468,12 +469,14 @@ pub struct BeaconChain<T: BeaconChainTypes> {
 pub struct AvailabilityPendingCache<T: EthSpec>(FuturesUnordered<ExecutedBlock<T>>);
 
 impl<T: EthSpec> Stream for AvailabilityPendingCache<T> {
-    type Item = Result<ExecutedBlock<T>, BlobError<T>>;
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.0.is_empty() {
+    type Item = Result<ExecutedBlock<T>, DataAvailabilityFailure<T>>;
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let availability_pending_blocks = self.0;
+        if availability_pending_blocks.is_empty() {
             return Poll::Pending;
         }
-        self.0.poll_next()
+        tokio::pin!(availability_pending_blocks);
+        availability_pending_blocks.poll_next(_cx)
     }
 }
 
@@ -2740,8 +2743,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Returns an `Err` if the given block was invalid, or an error was encountered during
     /// verification.
     pub async fn process_block<
-        A: AsSignedBlock<T::EthSpec>,
-        I: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T::EthSpec> + Send + Sync,
+        A: AsSignedBlock<T>,
+        I: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T> + Send + Sync,
         B: IntoWrappedAvailabilityPendingBlock<T> + IntoExecutionPendingBlock<T, I>,
     >(
         self: &Arc<Self>,

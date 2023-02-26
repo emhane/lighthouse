@@ -12,7 +12,7 @@ use beacon_chain::{
     BeaconChainError, BeaconChainTypes, BlockError, CountUnrealized, ForkChoiceError,
     GossipVerifiedBlock, NotifyExecutionLayer, DEFAULT_BLOB_CHANNEL_CAPACITY,
 };
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerAction, PeerId, ReportSource};
 use slog::{crit, debug, error, info, trace, warn};
 use slot_clock::SlotClock;
@@ -648,7 +648,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         }
     }
 
-    pub async fn process_gossip_unverified_blob(
+    pub fn process_gossip_unverified_blob(
         &self,
         message_id: MessageId,
         peer_id: PeerId,
@@ -709,18 +709,18 @@ impl<T: BeaconChainTypes> Worker<T> {
         // success notification
         let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
         tx.send((gossip_verified_blob, Some(oneshot_tx)));
-        match rx_oneshot.await {
-            Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
+        match rx_oneshot.try_recv()? {
+            // todo(emhane): await to give index filtering time
+            Some(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
                 // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
                 Ok(())
             }
-            Err(e) => Err(e),
-            Ok(()) => Ok(()),
+            None => Err(BlobError::SendOneshot(block_root)),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn process_gossip_blob(
+    pub fn process_gossip_blob(
         self,
         message_id: MessageId,
         peer_id: PeerId,
@@ -730,17 +730,14 @@ impl<T: BeaconChainTypes> Worker<T> {
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,
     ) {
-        if let Err(e) = self
-            .process_gossip_unverified_blob(
-                message_id,
-                peer_id,
-                peer_client,
-                block,
-                reprocess_tx.clone(),
-                seen_duration,
-            )
-            .await
-        {
+        if let Err(e) = self.process_gossip_unverified_blob(
+            message_id,
+            peer_id,
+            peer_client,
+            block,
+            reprocess_tx.clone(),
+            seen_duration,
+        ) {
             error!(
                     self.log, "Failed to verify blob for gossip";
                     "block_root" => block_root,

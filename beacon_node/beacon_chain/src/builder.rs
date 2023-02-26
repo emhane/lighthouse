@@ -24,7 +24,7 @@ use crate::{
 use eth1::Config as Eth1Config;
 use execution_layer::ExecutionLayer;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
-use futures::{channel::mpsc, future::Future};
+use futures::{channel::mpsc, Stream, StreamExt};
 use kzg::{Kzg, TrustedSetup};
 use lru::LruCache;
 use operation_pool::{OperationPool, PersistedOperationPool};
@@ -927,19 +927,21 @@ where
             );
         }
 
-        let chain = beacon_chain.clone();
+        let chain = Arc::new(beacon_chain);
         beacon_chain.task_executor.spawn_without_exit(
             async move {
                 let pending_blocks = AvailabilityPendingCache::<TEthSpec>::default();
+                tokio::pin!(rx);
+
                 loop {
                     tokio::select! {
-                        executed_block = rx => {
+                        Some(executed_block) = rx.next() => {
                             pending_blocks.push(executed_block);
                         }
-                        Some(Err(block, blobs, e)) = pending_blocks => {
+                        Some(Err(e)) = pending_blocks.next() => {
                             // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
                         }
-                        Some(Ok((available_block, executed_block))) = pending_blocks => {
+                        Some(Ok(executed_block)) = pending_blocks.next() => {
                             chain.spawn_blocking_handle(
                                 move || {
                                     chain.import_block_from_pending_availability_cache(

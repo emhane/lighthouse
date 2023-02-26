@@ -627,7 +627,7 @@ pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: IntoAvailabilityPendin
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
-impl_as_signed_block!(SignatureVerifiedBlock<T, B>, .block, T: BeaconChainTypes, B: IntoAvailabilityPendingBlock<T,>);
+impl_as_signed_block!(SignatureVerifiedBlock<T, B>, .block, B: IntoAvailabilityPendingBlock<T,>);
 
 /// Used to await the result of executing payload with a remote EE.
 type PayloadVerificationHandle<E> =
@@ -1651,7 +1651,7 @@ fn check_block_against_finalized_slot<T: BeaconChainTypes>(
 /// Taking a lock on the `chain.canonical_head.fork_choice` might cause a deadlock here.
 pub fn check_block_is_finalized_descendant<
     T: BeaconChainTypes,
-    B: Into<BlockWrapper<T::EthSpec>> + AsSignedBlock<T::EthSpec>,
+    B: Into<BlockWrapper<T::EthSpec>> + AsSignedBlock<T>,
 >(
     chain: &BeaconChain<T>,
     fork_choice: &BeaconForkChoice<T>,
@@ -1767,10 +1767,7 @@ fn verify_parent_block_is_known<T: BeaconChainTypes>(
 /// Returns `Err(BlockError::ParentUnknown)` if the parent is not found, or if an error occurs
 /// whilst attempting the operation.
 #[allow(clippy::type_complexity)]
-fn load_parent<
-    T: BeaconChainTypes,
-    B: Into<BlockWrapper<T::EthSpec>> + AsSignedBlock<T::EthSpec>,
->(
+fn load_parent<T: BeaconChainTypes, B: Into<BlockWrapper<T::EthSpec>> + AsSignedBlock<T>>(
     block_root: Hash256,
     block: B,
     chain: &BeaconChain<T>,
