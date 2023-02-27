@@ -2778,7 +2778,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // Verify and import the block.
         match import_block.await {
             // The block was successfully verified and imported. Yay.
-            Ok(block_root) => {
+            Ok(Some(block_root)) => {
                 trace!(
                     self.log,
                     "Beacon block imported";
@@ -2819,6 +2819,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 );
                 Err(other)
             }
+            Ok(None) => Err(BlockError::BlockMovedToAvailabilityPendingCache),
         }
     }
 

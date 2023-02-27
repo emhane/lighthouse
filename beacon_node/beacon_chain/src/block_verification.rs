@@ -74,6 +74,7 @@ use slog::{debug, error, warn, Logger};
 use slot_clock::SlotClock;
 use ssz::Encode;
 use ssz_types::VariableList;
+use state_processing::consensus_context;
 use state_processing::per_block_processing::{errors::IntoWithIndex, is_merge_transition_block};
 use state_processing::{
     block_signature_verifier::{BlockSignatureVerifier, Error as BlockSignatureVerifierError},
@@ -295,6 +296,10 @@ pub enum BlockError<T: EthSpec> {
     /// Making a block available failed. The [`DataAvailabilityFailure`] error contains the block
     /// or blobs that have already been received over the network.
     DataAvailability(DataAvailabilityFailure<T>),
+    /// Block is still not yet available after payload verification and is moved as an
+    /// [`crate::blob_verification::ExecutedBlock`] to the
+    /// [`crate::beacon_chain::AvailabilityPendingCache`] where it waits till it's available.
+    BlockMovedToAvailabilityPendingCache,
 }
 
 impl_wrap_type_in_variant!(<T: EthSpec,>, BlobError<T>, BlockError<T>, Self::BlobValidation);
@@ -597,32 +602,39 @@ pub fn signature_verify_chain_segment<T: BeaconChainTypes, B: TryIntoAvailableBl
 
     let mut signature_verified_blocks = Vec::with_capacity(chain_segment.len());
 
+    let mut consensus_contexts = Vec::with_capacity(chain_segment.len());
     for (block_root, block) in &chain_segment {
         let mut consensus_context =
             ConsensusContext::new(block.slot()).set_current_block_root(*block_root);
 
         signature_verifier.include_all_signatures(block.as_block(), &mut consensus_context)?;
 
+        consensus_context = consensus_context.set_kzg_commitments_consistent(true);
+        consensus_contexts.push(consensus_context);
+    }
+
+    if signature_verifier.verify().is_err() {
+        return Err(BlockError::InvalidSignature);
+    }
+
+    for ((block_root, block), consensus_context) in chain_segment
+        .into_iter()
+        .zip(consensus_contexts.into_iter())
+    {
         //FIXME(sean) batch kzg verification
         // converts the block to a type listening for blobs from network workers (if it isn't
         // already this type).
         let availability_pending_block =
-            block.into_availability_pending_block(*block_root, chain, VariableList::empty())?;
-
-        consensus_context = consensus_context.set_kzg_commitments_consistent(true);
+            block.into_availability_pending_block(block_root, chain, VariableList::empty())?;
 
         // Save the block and its consensus context. The context will have had its proposer index
         // and attesting indices filled in, which can be used to accelerate later block processing.
         signature_verified_blocks.push(SignatureVerifiedBlock {
             block: availability_pending_block,
-            block_root: *block_root,
+            block_root: block_root,
             parent: None,
             consensus_context,
         });
-    }
-
-    if signature_verifier.verify().is_err() {
-        return Err(BlockError::InvalidSignature);
     }
 
     drop(pubkey_cache);
