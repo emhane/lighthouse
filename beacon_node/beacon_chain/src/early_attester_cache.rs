@@ -69,7 +69,8 @@ impl<E: EthSpec> EarlyAttesterCache<E> {
             },
         };
 
-        let (block, blobs) = block.deconstruct();
+        // todo(emhane)
+        /*let (block, blobs) = block.deconstruct();
         let item = CacheItem {
             epoch,
             committee_lengths,
@@ -81,7 +82,7 @@ impl<E: EthSpec> EarlyAttesterCache<E> {
             proto_block,
         };
 
-        *self.item.write() = Some(item);
+        *self.item.write() = Some(item);*/
 
         Ok(())
     }

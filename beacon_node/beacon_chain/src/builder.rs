@@ -3,7 +3,7 @@ use crate::beacon_chain::{
     DEFAULT_PENDING_AVAILABILITY_BLOCKS, ETH1_CACHE_DB_KEY, OP_POOL_DB_KEY,
 };
 use crate::blob_cache::BlobCache;
-use crate::blob_verification::ExecutedBlock;
+use crate::blob_verification::{AvailabilityPendingBlock, ExecutedBlock};
 use crate::eth1_chain::{CachingEth1Backend, SszEth1};
 use crate::eth1_finalization_cache::Eth1FinalizationCache;
 use crate::fork_choice_signal::ForkChoiceSignalTx;
@@ -789,8 +789,13 @@ where
         let head_for_snapshot_cache = head_snapshot.clone();
         let canonical_head = CanonicalHead::new(fork_choice, Arc::new(head_snapshot));
 
-        let (pending_availability_cache_tx, rx) =
-            mpsc::channel::<ExecutedBlock<TEthSpec>>(TEthSpec::max_blobs_per_block());
+        let pending_capacity = TEthSpec::max_blobs_per_block();
+        let (pending_availability_cache_tx, rx) = mpsc::channel::<
+            ExecutedBlock<
+                Witness<TSlotClock, TEth1Backend, TEthSpec, THotStore, TColdStore>,
+                AvailabilityPendingBlock<TEthSpec>,
+            >,
+        >(pending_capacity);
 
         let beacon_chain = BeaconChain {
             spec: self.spec,
@@ -862,7 +867,7 @@ where
             blob_cache: BlobCache::default(),
             kzg,
             pending_availability_cache_tx,
-            pending_blocks_tx_rx: RwLock::new(HashMap::new_with_capacity(
+            pending_blocks_tx_rx: RwLock::new(HashMap::with_capacity(
                 DEFAULT_PENDING_AVAILABILITY_BLOCKS,
             )),
         };
@@ -930,7 +935,9 @@ where
         let chain = Arc::new(beacon_chain);
         beacon_chain.task_executor.spawn_without_exit(
             async move {
-                let pending_blocks = AvailabilityPendingCache::<TEthSpec>::default();
+                let pending_blocks = AvailabilityPendingCache::<
+                    Witness<TSlotClock, TEth1Backend, TEthSpec, THotStore, TColdStore>,
+                >::default();
                 tokio::pin!(rx);
 
                 loop {

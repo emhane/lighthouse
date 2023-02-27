@@ -656,7 +656,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         blob: Arc<SignedBlobSidecar<T::EthSpec>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
-    ) -> Result<(), BlobError<T::EthSpec>> {
+    ) -> Result<(), BlobError<T>> {
         // todo(emhane): verify signature
         let channels = self.chain.pending_blocks_tx_rx.write();
         let tx = match channels.entry(block_root) {
@@ -698,7 +698,7 @@ impl<T: BeaconChainTypes> Worker<T> {
             Entry::Vacant(e) => {
                 let (tx, rx) = mpsc::channel::<(
                     Arc<SignedBlobSidecar<T::EthSpec>>,
-                    Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
+                    Option<oneshot::Sender<Result<(), BlobError<T>>>>,
                 )>(T::EthSpec::max_blobs_per_block());
                 channels.insert(block_root, (tx.clone(), Some(rx)));
                 tx

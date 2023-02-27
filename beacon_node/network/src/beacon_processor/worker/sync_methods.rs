@@ -7,7 +7,7 @@ use crate::beacon_processor::DuplicateCache;
 use crate::metrics;
 use crate::sync::manager::{BlockProcessType, SyncMessage};
 use crate::sync::{BatchProcessResult, ChainId};
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper, IntoAvailabilityPendingBlock};
+use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper, TryIntoAvailableBlock};
 use beacon_chain::CountUnrealized;
 use beacon_chain::{
     BeaconChainError, BeaconChainTypes, BlockError, ChainSegmentResult, HistoricalBlockError,
@@ -429,10 +429,7 @@ impl<T: BeaconChainTypes> Worker<T> {
     }
 
     /// Helper function to handle a `BlockError` from `process_chain_segment`
-    fn handle_failed_chain_segment(
-        &self,
-        error: BlockError<T::EthSpec>,
-    ) -> Result<(), ChainSegmentFailed> {
+    fn handle_failed_chain_segment(&self, error: BlockError<T>) -> Result<(), ChainSegmentFailed> {
         match error {
             BlockError::ParentUnknown(block) => {
                 // blocks should be sequential and all parents should exist

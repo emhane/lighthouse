@@ -1,5 +1,5 @@
 use crate::metrics;
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper, IntoAvailabilityPendingBlock};
+use beacon_chain::blob_verification::{AsSignedBlock, TryIntoAvailableBlock};
 use beacon_chain::validator_monitor::{get_block_delay_ms, timestamp_now};
 use beacon_chain::NotifyExecutionLayer;
 use beacon_chain::{BeaconChain, BeaconChainTypes, BlockError, CountUnrealized};
@@ -19,7 +19,7 @@ use warp::Rejection;
 /// Handles a request from the HTTP API for full blocks.
 pub async fn publish_block<T: BeaconChainTypes>(
     block_root: Option<Hash256>,
-    block: Arc<SignedBeaconBlock<T::EthSpec>>,
+    block: AvailableBlock<T::EthSpec>,
     chain: Arc<BeaconChain<T>>,
     network_tx: &UnboundedSender<NetworkMessage<T::EthSpec>>,
     log: Logger,
@@ -32,7 +32,7 @@ pub async fn publish_block<T: BeaconChainTypes>(
 
     // Send the block, regardless of whether or not it is valid. The API
     // specification is very clear that this is the desired behaviour.
-    let wrapped_block: BlockWrapper<T::EthSpec> =
+    let wrapped_block: AvailableBlock<T::EthSpec> =
         if matches!(block.as_ref(), &SignedBeaconBlock::Eip4844(_)) {
             if let Some(sidecar) = chain.blob_cache.pop(&block_root) {
                 let block_and_blobs = SignedBeaconBlockAndBlobsSidecar {
@@ -41,8 +41,15 @@ pub async fn publish_block<T: BeaconChainTypes>(
                 };
                 crate::publish_pubsub_message(
                     network_tx,
-                    PubsubMessage::BeaconBlockAndBlobsSidecars(block_and_blobs.clone()),
+                    PubsubMessage::BeaconBlock(block.block_cloned()),
                 )?;
+                //todo(emhane)
+                /*for blob in blobs {
+                    crate::publish_pubsub_message(
+                        network_tx,
+                        PubsubMessage::BeaconBlock(block.block_cloned()),
+                    )?;
+                }*/
                 block_and_blobs.into()
             } else {
                 //FIXME(sean): This should probably return a specific no-blob-cached error code, beacon API coordination required

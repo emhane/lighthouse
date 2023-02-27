@@ -8,8 +8,9 @@ use crate::beacon_proposer_cache::compute_proposer_duties_from_head;
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
-    AsSignedBlock, AvailableBlock, BlobError, BlockWrapper, DataAvailabilityFailure, ExecutedBlock,
-    IntoAvailabilityPendingBlock, IntoWrappedAvailabilityPendingBlock, TryIntoAvailableBlock,
+    AsSignedBlock, AvailabilityPendingBlock, AvailableBlock, BlobError, DataAvailabilityFailure,
+    ExecutedBlock, IntoWrappedAvailabilityPendingBlock, TryIntoAvailableBlock,
+    TryIntoAvailableBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -74,7 +75,6 @@ use fork_choice::{
     InvalidationOperation, PayloadVerificationStatus, ResetPayloadStatuses,
 };
 use futures::prelude::stream::{futures_unordered::FuturesUnordered, Stream};
-use futures::stream::futures_unordered;
 use futures::{
     channel::mpsc::{Receiver, Sender},
     channel::oneshot,
@@ -121,9 +121,6 @@ use types::consts::merge::INTERVALS_PER_SLOT;
 use types::*;
 
 pub type ForkChoiceError = fork_choice::Error<crate::ForkChoiceStoreError>;
-
-/// Alias to appease clippy.
-type HashBlockTuple<E> = (Hash256, BlockWrapper<E>);
 
 /// The time-out before failure during an operation to take a read/write RwLock on the block
 /// processing cache.
@@ -442,7 +439,8 @@ pub struct BeaconChain<T: BeaconChainTypes> {
     pub validator_monitor: RwLock<ValidatorMonitor<T::EthSpec>>,
     pub blob_cache: BlobCache<T::EthSpec>,
     pub kzg: Option<Arc<kzg::Kzg>>,
-    pub pending_availability_cache_tx: Sender<ExecutedBlock<T::EthSpec>>,
+    pub pending_availability_cache_tx:
+        Sender<ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>>,
     /// Clone a sender to send a blob that arrived over network to its block and listen
     /// for error. Remove a receiver to include in an availability-pending block when the
     /// block arrives over network.
@@ -466,10 +464,13 @@ pub struct BeaconChain<T: BeaconChainTypes> {
 }
 
 #[derive(Default)]
-pub struct AvailabilityPendingCache<T: EthSpec>(FuturesUnordered<ExecutedBlock<T>>);
+pub struct AvailabilityPendingCache<T: BeaconChainTypes>(
+    FuturesUnordered<ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>>,
+);
 
-impl<T: EthSpec> Stream for AvailabilityPendingCache<T> {
-    type Item = Result<ExecutedBlock<T>, DataAvailabilityFailure<T>>;
+impl<T: BeaconChainTypes> Stream for AvailabilityPendingCache<T> {
+    type Item =
+        Result<ExecutedBlock<T, AvailableBlock<T::EthSpec>>, DataAvailabilityFailure<T::EthSpec>>;
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let availability_pending_blocks = self.0;
         if availability_pending_blocks.is_empty() {
@@ -480,8 +481,8 @@ impl<T: EthSpec> Stream for AvailabilityPendingCache<T> {
     }
 }
 
-impl<T: EthSpec> AvailabilityPendingCache<T> {
-    pub fn push(&mut self, block: ExecutedBlock<T>) {
+impl<T: BeaconChainTypes> AvailabilityPendingCache<T> {
+    pub fn push(&mut self, block: ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>) {
         self.0.push(block)
     }
 }
@@ -2479,11 +2480,12 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Accepts a `chain_segment` and filters out any uninteresting blocks (e.g., pre-finalization
     /// or already-known).
     ///
-    /// This method is potentially long-running and should not run on the core executor.
-    pub fn filter_chain_segment(
+    /// This method is potentially long-running and should not run on the core executor.'
+    #[allow(clippy::type_complexity)]
+    pub fn filter_chain_segment<B: TryIntoAvailableBlock<T>>(
         self: &Arc<Self>,
-        chain_segment: Vec<BlockWrapper<T::EthSpec>>,
-    ) -> Result<Vec<HashBlockTuple<T::EthSpec>>, ChainSegmentResult<T::EthSpec>> {
+        chain_segment: Vec<B>,
+    ) -> Result<Vec<(Hash256, B)>, ChainSegmentResult<T::EthSpec>> {
         // This function will never import any blocks.
         let imported_blocks = 0;
         let mut filtered_chain_segment = Vec::with_capacity(chain_segment.len());
@@ -2586,9 +2588,9 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     ///
     /// This method is generally much more efficient than importing each block using
     /// `Self::process_block`.
-    pub async fn process_chain_segment(
+    pub async fn process_chain_segment<B: TryIntoAvailableBlock<T>>(
         self: &Arc<Self>,
-        chain_segment: Vec<BlockWrapper<T::EthSpec>>,
+        chain_segment: Vec<B>,
         count_unrealized: CountUnrealized,
         notify_execution_layer: NotifyExecutionLayer,
     ) -> ChainSegmentResult<T::EthSpec> {
@@ -2744,7 +2746,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// verification.
     pub async fn process_block<
         A: AsSignedBlock<T>,
-        I: IntoAvailabilityPendingBlock<T> + AsSignedBlock<T> + Send + Sync,
+        I: TryIntoAvailableBlock<T>,
         B: IntoWrappedAvailabilityPendingBlock<T> + IntoExecutionPendingBlock<T, I>,
     >(
         self: &Arc<Self>,
@@ -2760,7 +2762,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         metrics::inc_counter(&metrics::BLOCK_PROCESSING_REQUESTS);
 
         let pending_availability_block =
-            unverified_block.wrap_into_availability_pending_block(block_root, &self);
+            unverified_block.wrap_into_availability_pending_block(block_root, &self)?;
         let slot = pending_availability_block.slot();
 
         // A small closure to group the verification and import errors.
@@ -2824,7 +2826,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
     /// Verifies the execution payload and imports the block if it is available (all
     /// kzg-verification has completed).
-    async fn import_execution_pending_block<B: IntoAvailabilityPendingBlock<T>>(
+    async fn import_execution_pending_block<B: TryIntoAvailableBlock<T>>(
         self: Arc<Self>,
         execution_pending_block: ExecutionPendingBlock<T, B>,
         count_unrealized: CountUnrealized,
@@ -2879,7 +2881,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             );
         }
 
-        match block.try_into() {
+        match block.try_into_available_block(&self) {
             // At best all blobs have arrived over network and been verified while waiting on
             // input from execution layer.
             Ok(available_block) => {
@@ -2927,7 +2929,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     /// Imports a block to fork choice that wasn't available at first attempt to import it.
     pub fn import_block_from_pending_availability_cache(
         &self,
-        executed_block: ExecutedBlock<T::EthSpec>,
+        executed_block: ExecutedBlock<T, AvailableBlock<T::EthSpec>>,
     ) -> Result<Hash256, BlockError<T::EthSpec>> {
         let ExecutedBlock {
             block_root,
@@ -2941,7 +2943,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             consensus_context,
         } = executed_block;
         self.import_block(
-            block.try_into_available_block(self)?,
+            block,
             block_root,
             state,
             confirmed_state_roots,
@@ -3130,13 +3132,13 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         ops.push(StoreOp::PutBlock(block_root, signed_block.clone()));
         ops.push(StoreOp::PutState(block.state_root(), &state));
 
-        if let Some(blobs) = blobs {
+        /*if let Some(blobs) = blobs {
             if blobs.blobs.len() > 0 {
                 //FIXME(sean) using this for debugging for now
                 info!(self.log, "Writing blobs to store"; "block_root" => ?block_root);
                 ops.push(StoreOp::PutBlobs(block_root, blobs));
             }
-        };
+        };*/
         let txn_lock = self.store.hot_db.begin_rw_transaction();
 
         kv_store_ops.extend(self.store.convert_to_kv_batch(ops)?);

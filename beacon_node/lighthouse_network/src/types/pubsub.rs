@@ -12,14 +12,17 @@ use types::{
     Attestation, AttesterSlashing, EthSpec, ForkContext, ForkName, LightClientFinalityUpdate,
     LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock,
     SignedBeaconBlockAltair, SignedBeaconBlockAndBlobsSidecar, SignedBeaconBlockBase,
-    SignedBeaconBlockCapella, SignedBeaconBlockMerge, SignedBlsToExecutionChange,
-    SignedContributionAndProof, SignedVoluntaryExit, SubnetId, SyncCommitteeMessage, SyncSubnetId,
+    SignedBeaconBlockCapella, SignedBeaconBlockMerge, SignedBlobSidecar,
+    SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit, SubnetId,
+    SyncCommitteeMessage, SyncSubnetId,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PubsubMessage<T: EthSpec> {
     /// Gossipsub message providing notification of a new block.
     BeaconBlock(Arc<SignedBeaconBlock<T>>),
+    /// Gossipsub message providing notification of a new SignedBlobSidecar.
+    //BlobSidecar(Arc<SignedBlobSidecar<T>>),
     /// Gossipsub message providing notification of a new SignedBeaconBlock coupled with a blobs sidecar.
     BeaconBlockAndBlobsSidecars(SignedBeaconBlockAndBlobsSidecar<T>),
     /// Gossipsub message providing notification of a Aggregate attestation and associated proof.
