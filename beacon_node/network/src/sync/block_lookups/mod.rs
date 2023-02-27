@@ -479,6 +479,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
                         error!(self.log, "Beacon chain error processing single block"; "block_root" => %root, "error" => ?e);
                     }
                     BlockError::ParentUnknown(block) => {
+                        let block = block.0;
                         self.search_parent(root, block, peer_id, cx);
                     }
                     ref e @ BlockError::ExecutionPayloadError(ref epe) if !epe.penalize_peer() => {
@@ -557,6 +558,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
 
         match result {
             BlockProcessResult::Err(BlockError::ParentUnknown(block)) => {
+                let block = block.0;
                 // need to keep looking for parents
                 // add the block back to the queue and continue the search
                 parent_lookup.add_block(block);

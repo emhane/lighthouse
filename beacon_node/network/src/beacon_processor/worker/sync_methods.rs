@@ -432,6 +432,7 @@ impl<T: BeaconChainTypes> Worker<T> {
     fn handle_failed_chain_segment(&self, error: BlockError<T>) -> Result<(), ChainSegmentFailed> {
         match error {
             BlockError::ParentUnknown(block) => {
+                let block = block.0;
                 // blocks should be sequential and all parents should exist
                 Err(ChainSegmentFailed {
                     message: format!("Block has an unknown parent: {}", block.parent_root()),

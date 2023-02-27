@@ -651,7 +651,11 @@ fn test_same_chain_race_condition() {
             // one block was removed
             bl.parent_block_processed(chain_hash, BlockError::BlockIsAlreadyKnown.into(), &mut cx)
         } else {
-            bl.parent_block_processed(chain_hash, BlockError::ParentUnknown(block).into(), &mut cx)
+            bl.parent_block_processed(
+                chain_hash,
+                BlockError::ParentUnknown(block.into()).into(),
+                &mut cx,
+            )
         }
         parent_lookups_consistency(&bl)
     }

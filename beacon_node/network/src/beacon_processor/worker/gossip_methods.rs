@@ -708,7 +708,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         // the block has picked up the blob receiver, let it do the index filtering and wait for
         // success notification
         let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
-        tx.send((gossip_verified_blob, Some(oneshot_tx)));
+        tx.try_send((gossip_verified_blob, Some(oneshot_tx)))?;
         match rx_oneshot.try_recv()? {
             // todo(emhane): await to give index filtering time
             Some(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
@@ -883,6 +883,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                 // todo(emhane): deal with failure
             }
             Err(BlockError::ParentUnknown(block)) => {
+                let block = block.0;
                 debug!(
                     self.log,
                     "Unknown parent for gossip block";
@@ -1093,6 +1094,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                 self.chain.recompute_head_at_current_slot().await;
             }
             Err(BlockError::ParentUnknown(block)) => {
+                let block = block.0;
                 // Inform the sync manager to find parents for this block
                 // This should not occur. It should be checked by `should_forward_block`
                 error!(

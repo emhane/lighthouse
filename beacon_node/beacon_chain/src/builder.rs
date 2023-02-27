@@ -24,9 +24,9 @@ use crate::{
 use eth1::Config as Eth1Config;
 use execution_layer::ExecutionLayer;
 use fork_choice::{ForkChoice, ResetPayloadStatuses};
-use futures::{channel::mpsc, Stream, StreamExt};
+use futures::{channel::mpsc, StreamExt};
 use kzg::{Kzg, TrustedSetup};
-use lru::LruCache;
+use lru::LruCache; //todo(emahne) for blob-to-availability-pending-block channels
 use operation_pool::{OperationPool, PersistedOperationPool};
 use parking_lot::RwLock;
 use proto_array::ReOrgThreshold;
@@ -790,7 +790,7 @@ where
         let canonical_head = CanonicalHead::new(fork_choice, Arc::new(head_snapshot));
 
         let pending_capacity = TEthSpec::max_blobs_per_block();
-        let (pending_availability_cache_tx, rx) = mpsc::channel::<
+        let (availability_pending_cache_tx, rx) = mpsc::channel::<
             ExecutedBlock<
                 Witness<TSlotClock, TEth1Backend, TEthSpec, THotStore, TColdStore>,
                 AvailabilityPendingBlock<TEthSpec>,
@@ -866,7 +866,7 @@ where
             validator_monitor: RwLock::new(validator_monitor),
             blob_cache: BlobCache::default(),
             kzg,
-            pending_availability_cache_tx,
+            availability_pending_cache_tx: RwLock::new(availability_pending_cache_tx),
             pending_blocks_tx_rx: RwLock::new(HashMap::with_capacity(
                 DEFAULT_PENDING_AVAILABILITY_BLOCKS,
             )),
@@ -937,7 +937,7 @@ where
             async move {
                 let pending_blocks = AvailabilityPendingCache::<
                     Witness<TSlotClock, TEth1Backend, TEthSpec, THotStore, TColdStore>,
-                >::default();
+                >::new();
                 tokio::pin!(rx);
 
                 loop {
