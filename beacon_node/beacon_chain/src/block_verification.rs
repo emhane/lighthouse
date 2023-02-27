@@ -566,7 +566,7 @@ fn process_block_slash_info<T: BeaconChainTypes>(
 /// will be returned.
 pub fn signature_verify_chain_segment<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>(
     mut chain_segment: Vec<(Hash256, B)>,
-    chain: &BeaconChain<T>,
+    chain: &Arc<BeaconChain<T>>,
 ) -> Result<
     Vec<SignatureVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>>,
     BlockError<T::EthSpec>,

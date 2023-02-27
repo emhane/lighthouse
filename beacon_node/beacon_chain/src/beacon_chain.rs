@@ -77,6 +77,7 @@ use futures::prelude::stream::{futures_unordered::FuturesUnordered, Stream};
 use futures::{
     channel::mpsc::{Receiver, Sender},
     channel::oneshot,
+    StreamExt,
 };
 use itertools::process_results;
 use itertools::Itertools;
@@ -470,13 +471,11 @@ pub struct AvailabilityPendingCache<T: BeaconChainTypes>(
 impl<T: BeaconChainTypes> Stream for AvailabilityPendingCache<T> {
     type Item =
         Result<ExecutedBlock<T, AvailableBlock<T::EthSpec>>, DataAvailabilityFailure<T::EthSpec>>;
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let availability_pending_blocks = self.0;
-        if availability_pending_blocks.is_empty() {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.0.is_empty() {
             return Poll::Pending;
         }
-        tokio::pin!(availability_pending_blocks);
-        availability_pending_blocks.poll_next(_cx)
+        self.0.poll_next_unpin(cx)
     }
 }
 impl<T: BeaconChainTypes> AvailabilityPendingCache<T> {
@@ -2589,7 +2588,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     ///
     /// This method is generally much more efficient than importing each block using
     /// `Self::process_block`.
-    pub async fn process_chain_segment<B: TryIntoAvailableBlock<T>>(
+    pub async fn process_chain_segment<B: TryIntoAvailableBlock<T> + 'static>(
         self: &Arc<Self>,
         chain_segment: Vec<B>,
         count_unrealized: CountUnrealized,
@@ -2829,7 +2828,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         self: Arc<Self>,
         execution_pending_block: ExecutionPendingBlock<T, B>,
         count_unrealized: CountUnrealized,
-    ) -> Result<Hash256, BlockError<T::EthSpec>> {
+    ) -> Result<Option<Hash256>, BlockError<T::EthSpec>> {
         let ExecutionPendingBlock {
             block,
             block_root,
@@ -2880,11 +2879,11 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             );
         }
 
-        let maybe_already_available_block = block.try_into_available_block(&self);
-        match maybe_already_available_block {
+        let block = block.try_into_available_block(&self)?.await;
+        match block.map_err(|_| BeaconChainError::RuntimeShutdown)? {
             // At best all blobs have arrived over network and been verified while waiting on
             // input from execution layer.
-            Ok(available_block) => {
+            Some(Ok(available_block)) => {
                 let chain = self.clone();
                 let block_hash = self
                     .spawn_blocking_handle(
@@ -2905,16 +2904,12 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                     )
                     .await??;
 
-                Ok(block_hash)
+                Ok(Some(block_hash))
             }
-            Err(BlockError::BlobValidation(BlobError::PendingAvailability)) => {
+            Some(Err(BlockError::BlobValidation(BlobError::PendingAvailability(block)))) => {
                 let executed_block = ExecutedBlock {
                     block_root,
-                    block: block.into_availability_pending_block(
-                        block_root,
-                        &self,
-                        VariableList::empty(),
-                    )?,
+                    block,
                     state,
                     confirmed_state_roots,
                     payload_verification_status,
@@ -2926,9 +2921,10 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                 self.availability_pending_cache_tx
                     .write()
                     .try_send(executed_block);
-                Err(BlockError::BlobValidation(BlobError::PendingAvailability))
+                Ok(None)
             }
-            Err(e) => Err(e),
+            Some(Err(e)) => Err(e)?,
+            None => Err(Error::RuntimeShutdown)?,
         }
     }
 
@@ -2955,7 +2951,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
             confirmed_state_roots,
             payload_verification_status,
             count_unrealized,
-            *parent_block,
+            (*parent_block).clone(),
             parent_eth1_finalization_data,
             consensus_context,
         )

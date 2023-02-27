@@ -276,13 +276,13 @@ impl<T: BeaconChainTypes> Worker<T> {
     }
 
     /// Helper function to process blocks batches which only consumes the chain and blocks to process.
-    async fn process_blocks<'a>(
+    async fn process_blocks<'a, B: TryIntoAvailableBlock<T>>(
         &self,
-        downloaded_blocks: impl Iterator<Item = &'a BlockWrapper<T::EthSpec>>,
+        downloaded_blocks: impl Iterator<Item = &'a B>,
         count_unrealized: CountUnrealized,
         notify_execution_layer: NotifyExecutionLayer,
     ) -> (usize, Result<(), ChainSegmentFailed>) {
-        let blocks: Vec<_> = downloaded_blocks.cloned().collect();
+        let blocks: Vec<B> = downloaded_blocks.cloned().collect();
         match self
             .chain
             .process_chain_segment(blocks, count_unrealized, notify_execution_layer)
