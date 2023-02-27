@@ -143,6 +143,13 @@ pub enum BlockError<T: EthSpec> {
     /// It's unclear if this block is valid, but it cannot be processed without already knowing
     /// its parent.
     ParentUnknown(AvailableBlock<T>),
+    /// The parent block was unknown.
+    ///
+    /// ## Peer scoring
+    ///
+    /// It's unclear if this block is valid, but it cannot be processed without already knowing
+    /// its parent.
+    ParentUnknownAndAvailabilityUnknown(Arc<SignedBeaconBlock<T>>),
     /// The block skips too many slots and is a DoS risk.
     TooManySkippedSlots { parent_slot: Slot, block_slot: Slot },
     /// The block slot is greater than the present slot.
@@ -287,6 +294,8 @@ pub enum BlockError<T: EthSpec> {
     /// The peer sent us an invalid block, but I'm not really sure how to score this in an
     /// "optimistic" sync world.
     ParentExecutionPayloadInvalid { parent_root: Hash256 },
+    /// Block is aready an [`ExecutedBlock`].
+    BlockIsExecutedBlock,
     /// Blob validation failed.
     BlobValidation(BlobError<T>),
     /// Making a block available failed. The [`DataAvailabilityFailure`] error contains the block
@@ -411,16 +420,20 @@ impl<T: EthSpec> From<InconsistentFork> for BlockError<T> {
     }
 }
 
-impl<T: EthSpec> std::fmt::Display for BlockError<T> {
+// todo(emhane)
+/*impl<T: EthSpec> std::fmt::Display for BlockError<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlockError::ParentUnknown(block) => {
-                write!(f, "ParentUnknown(parent_root:{})", block.parent_root())
+                write!(f, "ParentUnknown(parent_root:{})", <AvailableBlock<T> as AsSignedBlock<T>>::parent_root(&block))
+            }
+            BlockError::ParentUnknownAndAvailabilityUnknown(block) => {
+                write!(f, "ParentUnknown(parent_root:{})", <AvailabilityPendingBlock<T> as AsSignedBlock<T>>::parent_root(&block))
             }
             other => write!(f, "{:?}", other),
         }
     }
-}
+}*/
 
 impl<T: EthSpec> From<BlockSignatureVerifierError> for BlockError<T> {
     fn from(e: BlockSignatureVerifierError) -> Self {
@@ -545,7 +558,7 @@ fn process_block_slash_info<T: BeaconChainTypes>(
 /// The given `chain_segment` must contain only blocks from the same epoch, otherwise an error
 /// will be returned.
 pub fn signature_verify_chain_segment<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>(
-    mut chain_segment: Vec<(Hash256, AvailableBlock<T::EthSpec>)>,
+    mut chain_segment: Vec<(Hash256, B)>,
     chain: &BeaconChain<T>,
 ) -> Result<Vec<SignatureVerifiedBlock<T, B>>, BlockError<T::EthSpec>> {
     if chain_segment.is_empty() {
@@ -688,6 +701,33 @@ pub trait IntoExecutionPendingBlock<T: BeaconChainTypes, B: TryIntoAvailableBloc
     ) -> Result<ExecutionPendingBlock<T, B>, BlockSlashInfo<BlockError<T::EthSpec>>>;
 
     fn block(&self) -> &SignedBeaconBlock<T::EthSpec>;
+}
+
+impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoExecutionPendingBlock<T, B>
+    for ExecutionPendingBlock<T, B>
+{
+    fn into_execution_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+        notify_execution_layer: NotifyExecutionLayer,
+    ) -> Result<ExecutionPendingBlock<T, B>, BlockError<T::EthSpec>> {
+        Ok(self)
+    }
+
+    /// Convert the block to fully-verified form while producing data to aid checking slashability.
+    fn into_execution_pending_block_slashable(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+        notify_execution_layer: NotifyExecutionLayer,
+    ) -> Result<ExecutionPendingBlock<T, B>, BlockSlashInfo<BlockError<T::EthSpec>>> {
+        Ok(self)
+    }
+
+    fn block(&self) -> &SignedBeaconBlock<T::EthSpec> {
+        self.as_block()
+    }
 }
 
 impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> GossipVerifiedBlock<T, B> {

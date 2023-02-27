@@ -1,6 +1,7 @@
 use crate::beacon_chain::{BeaconChain, BeaconChainTypes, MAXIMUM_GOSSIP_CLOCK_DISPARITY};
 use crate::block_verification::{
-    BlockError, ExecutionPendingBlock, GossipVerifiedBlock, SignatureVerifiedBlock,
+    BlockError, ExecutionPendingBlock, GossipVerifiedBlock, IntoExecutionPendingBlock,
+    SignatureVerifiedBlock,
 };
 use crate::{eth1_finalization_cache::Eth1FinalizationData, kzg_utils, BeaconChainError};
 use derivative::Derivative;
@@ -116,7 +117,7 @@ pub enum DataAvailabilityFailure<E: EthSpec> {
         VariableList<Arc<SignedBlobSidecar<E>>, E::MaxBlobsPerBlock>,
         BlobError<E>,
     ),
-    /// Verifying data availability of a block that which already has a verified execution payload
+    /// Verifying data availability of a block which already has a verified execution payload
     /// failed. The error contains the block and blobs that have been received.
     ExecutedBlock(
         ExecutedBlockInError<E>,
@@ -291,8 +292,11 @@ pub enum DataAvailabilityCheckRequired {
     No,
 }
 
-impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPendingBlock<T>
+impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPendingBlock<T, B>
     for ExecutionPendingBlock<T, B>
+where
+    ExecutionPendingBlock<T, AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec>>:
+        IntoExecutionPendingBlock<T, B>,
 {
     type Block = ExecutionPendingBlock<T, AvailabilityPendingBlock<T::EthSpec>>;
     fn wrap_into_availability_pending_block(
@@ -329,8 +333,11 @@ impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPe
     }
 }
 
-impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
+impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPendingBlock<T, B>
     for ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>
+where
+    ExecutedBlock<T, AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec>>:
+        IntoExecutionPendingBlock<T, B>,
 {
     type Block = Self;
     fn wrap_into_availability_pending_block(
@@ -367,8 +374,41 @@ impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
     }
 }
 
-impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPendingBlock<T>
+impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoExecutionPendingBlock<T, B>
+    for ExecutedBlock<T, B>
+{
+    fn into_execution_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+        notify_execution_layer: crate::NotifyExecutionLayer,
+    ) -> Result<ExecutionPendingBlock<T, B>, BlockError<T::EthSpec>> {
+        Err(BlockError::BlockIsExecutedBlock)
+    }
+
+    /// Convert the block to fully-verified form while producing data to aid checking slashability.
+    fn into_execution_pending_block_slashable(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+        notify_execution_layer: crate::NotifyExecutionLayer,
+    ) -> Result<
+        ExecutionPendingBlock<T, B>,
+        crate::block_verification::BlockSlashInfo<BlockError<T::EthSpec>>,
+    > {
+        unimplemented!()
+    }
+
+    fn block(&self) -> &SignedBeaconBlock<T::EthSpec> {
+        self.as_block()
+    }
+}
+
+impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPendingBlock<T, B>
     for SignatureVerifiedBlock<T, B>
+where
+    SignatureVerifiedBlock<T, AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec>>:
+        IntoExecutionPendingBlock<T, B>,
 {
     type Block = SignatureVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>;
     fn wrap_into_availability_pending_block(
@@ -396,8 +436,11 @@ impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPe
     }
 }
 
-impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPendingBlock<T>
+impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPendingBlock<T, B>
     for GossipVerifiedBlock<T, B>
+where
+    GossipVerifiedBlock<T, AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec>>:
+        IntoExecutionPendingBlock<T, B>,
 {
     type Block = GossipVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>;
     fn wrap_into_availability_pending_block(
@@ -427,8 +470,10 @@ impl<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> IntoWrappedAvailabilityPe
 
 /// Reconstructs a block with metadata to update its inner block to an
 /// [`AvailabilityPendingBlock`].
-pub trait IntoWrappedAvailabilityPendingBlock<T: BeaconChainTypes>: AsSignedBlock<T> {
-    type Block;
+pub trait IntoWrappedAvailabilityPendingBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>:
+    AsSignedBlock<T>
+{
+    type Block: IntoExecutionPendingBlock<T, B>;
     fn wrap_into_availability_pending_block(
         self,
         block_root: Hash256,
@@ -830,6 +875,7 @@ pub const AVAILABILITY_PENDING_CACHE_ITEM_TIMEOUT: u64 = 5;
 
 // todo(emhane): temp fix to avoid rewriting beacon chain test harnesss due to propagation of
 // generic BeaconChainTypes via BlockError
+#[derive(Debug)]
 struct ExecutedBlockInError<E: EthSpec> {
     block_root: Hash256,
     block: Arc<SignedBeaconBlock<E>>,

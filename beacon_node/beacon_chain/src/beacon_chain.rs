@@ -480,8 +480,10 @@ impl<T: BeaconChainTypes> Stream for AvailabilityPendingCache<T> {
         availability_pending_blocks.poll_next(_cx)
     }
 }
-
 impl<T: BeaconChainTypes> AvailabilityPendingCache<T> {
+    pub fn new() -> Self {
+        AvailabilityPendingCache(FuturesUnordered::new())
+    }
     pub fn push(&mut self, block: ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>) {
         self.0.push(block)
     }
@@ -2716,7 +2718,8 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
                             debug!(
                                 chain.log,
                                 "Rejected gossip block";
-                                "error" => e.to_string(),
+                               // "error" => e.to_string(), //todo (emhane)
+                                "error" => ?e,
                                 "graffiti" => graffiti_string,
                                 "slot" => slot,
                             );
@@ -2747,7 +2750,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
     pub async fn process_block<
         A: AsSignedBlock<T>,
         I: TryIntoAvailableBlock<T>,
-        B: IntoWrappedAvailabilityPendingBlock<T> + IntoExecutionPendingBlock<T, I>,
+        B: IntoWrappedAvailabilityPendingBlock<T, I> + IntoExecutionPendingBlock<T, I>,
     >(
         self: &Arc<Self>,
         block_root: Hash256,
