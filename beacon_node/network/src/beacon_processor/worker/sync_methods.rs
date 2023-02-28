@@ -7,7 +7,9 @@ use crate::beacon_processor::DuplicateCache;
 use crate::metrics;
 use crate::sync::manager::{BlockProcessType, SyncMessage};
 use crate::sync::{BatchProcessResult, ChainId};
-use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock, TryIntoAvailableBlock};
+use beacon_chain::blob_verification::{
+    AsSignedBlock, SomeAvailabilityBlock, TryIntoAvailableBlock,
+};
 use beacon_chain::CountUnrealized;
 use beacon_chain::{
     BeaconChainError, BeaconChainTypes, BlockError, ChainSegmentResult, HistoricalBlockError,
@@ -276,13 +278,13 @@ impl<T: BeaconChainTypes> Worker<T> {
     }
 
     /// Helper function to process blocks batches which only consumes the chain and blocks to process.
-    async fn process_blocks<'a, B: TryIntoAvailableBlock<T>>(
+    async fn process_blocks<'a>(
         &self,
-        downloaded_blocks: impl Iterator<Item = &'a B>,
+        downloaded_blocks: impl Iterator<Item = &'a Arc<SignedBeaconBlock<T::EthSpec>>>,
         count_unrealized: CountUnrealized,
         notify_execution_layer: NotifyExecutionLayer,
     ) -> (usize, Result<(), ChainSegmentFailed>) {
-        let blocks: Vec<B> = downloaded_blocks.cloned().collect();
+        let blocks: Vec<Arc<SignedBeaconBlock<T::EthSpec>>> = downloaded_blocks.cloned().collect();
         match self
             .chain
             .process_chain_segment(blocks, count_unrealized, notify_execution_layer)
@@ -429,7 +431,10 @@ impl<T: BeaconChainTypes> Worker<T> {
     }
 
     /// Helper function to handle a `BlockError` from `process_chain_segment`
-    fn handle_failed_chain_segment(&self, error: BlockError<T::EthSpec>) -> Result<(), ChainSegmentFailed> {
+    fn handle_failed_chain_segment(
+        &self,
+        error: BlockError<T::EthSpec>,
+    ) -> Result<(), ChainSegmentFailed> {
         match error {
             BlockError::ParentUnknown(block) => {
                 let block = block.0;
