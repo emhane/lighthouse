@@ -1,5 +1,6 @@
-use super::RootBlockTuple;
-use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
+use beacon_chain::blob_verification::{
+    AsSignedBlock, SomeAvailabilityBlock, TryIntoAvailableBlock,
+};
 use beacon_chain::BeaconChainTypes;
 use lighthouse_network::PeerId;
 use store::Hash256;
@@ -21,11 +22,12 @@ pub(crate) const PARENT_FAIL_TOLERANCE: u8 = 5;
 pub(crate) const PARENT_DEPTH_TOLERANCE: usize = SLOT_IMPORT_TOLERANCE * 2;
 
 /// Maintains a sequential list of parents to lookup and the lookup's current state.
+#[allow(clippy::type_complexity)]
 pub(crate) struct ParentLookup<T: BeaconChainTypes> {
     /// The root of the block triggering this parent request.
     chain_hash: Hash256,
     /// The blocks that have currently been downloaded.
-    downloaded_blocks: Vec<RootBlockTuple<T::EthSpec>>,
+    downloaded_blocks: Vec<(Hash256, SomeAvailabilityBlock<T::EthSpec>)>,
     /// Request of the last parent.
     current_parent_request: SingleBlockRequest<PARENT_FAIL_TOLERANCE>,
     /// Id of the last parent request.
@@ -159,11 +161,12 @@ impl<T: BeaconChainTypes> ParentLookup<T> {
 
     /// Verifies that the received block is what we requested. If so, parent lookup now waits for
     /// the processing result of the block.
-    pub fn verify_block(
+    #[allow(clippy::type_complexity)]
+    pub fn verify_block<B: TryIntoAvailableBlock<T>>(
         &mut self,
-        block: Option<SomeAvailabilityBlock<T::EthSpec>>,
+        block: Option<B>,
         failed_chains: &mut lru_cache::LRUTimeCache<Hash256>,
-    ) -> Result<Option<RootBlockTuple<T::EthSpec>>, VerifyError> {
+    ) -> Result<Option<(Hash256, B)>, VerifyError> {
         let root_and_block = self.current_parent_request.verify_block(block)?;
 
         // check if the parent of this block isn't in the failed cache. If it is, this chain should

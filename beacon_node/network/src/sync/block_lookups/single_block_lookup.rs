@@ -1,6 +1,7 @@
-use super::RootBlockTuple;
-use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
-use beacon_chain::get_block_root;
+use beacon_chain::blob_verification::{
+    AsSignedBlock, SomeAvailabilityBlock, TryIntoAvailableBlock,
+};
+use beacon_chain::{get_block_root, BeaconChainTypes};
 use lighthouse_network::{rpc::BlocksByRootRequest, PeerId};
 use rand::seq::IteratorRandom;
 use ssz_types::VariableList;
@@ -102,10 +103,11 @@ impl<const MAX_ATTEMPTS: u8> SingleBlockRequest<MAX_ATTEMPTS> {
 
     /// Verifies if the received block matches the requested one.
     /// Returns the block for processing if the response is what we expected.
-    pub fn verify_block<T: EthSpec>(
+    #[allow(clippy::type_complexity)]
+    pub fn verify_block<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>(
         &mut self,
-        block: Option<SomeAvailabilityBlock<T>>,
-    ) -> Result<Option<RootBlockTuple<T>>, VerifyError> {
+        block: Option<B>,
+    ) -> Result<Option<(Hash256, B)>, VerifyError> {
         match self.state {
             State::AwaitingDownload => {
                 self.register_failure_downloading();
@@ -241,7 +243,7 @@ mod tests {
 
         // Now we receive the block and send it for processing
         sl.request_block().unwrap();
-        sl.verify_block(Some(block.into())).unwrap().unwrap();
+        sl.verify_block(Some(block)).unwrap().unwrap();
 
         // One processing failure maxes the available attempts
         sl.register_failure_processing();

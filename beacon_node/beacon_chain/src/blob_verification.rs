@@ -102,6 +102,8 @@ pub enum BlobError<T: EthSpec> {
     RecvBlob(TryRecvError),
     /// Sending a blob failed.
     SendBlob(TrySendError<Arc<SignedBlobSidecar<T>>>),
+    /// An [`AvailabilityPendingBlock`] already exists for this block.
+    Duplicate,
 }
 
 #[derive(Debug)]
@@ -191,7 +193,7 @@ pub fn validate_blob_for_gossip<T: BeaconChainTypes, B: AsSignedBlock<T>>(
 
 fn verify_blobs<T: EthSpec>(
     block: &SignedBeaconBlock<T>,
-    blobs: VariableList<Arc<SignedBlobSidecar<T>>, T::MaxBlobsPerBlock>,
+    blobs: &VariableList<Arc<SignedBlobSidecar<T>>, T::MaxBlobsPerBlock>,
     kzg: &Option<Arc<Kzg>>,
 ) -> Result<(), BlobError<T>> {
     let Some(kzg) = kzg else {
@@ -210,7 +212,7 @@ fn verify_blobs<T: EthSpec>(
         .transpose()
         .ok_or(BlobError::TransactionsMissing)??;
     verify_data_availability::<T>(
-        blobs,
+        &blobs,
         kzg_commitments,
         transactions,
         block.slot(),
@@ -220,7 +222,7 @@ fn verify_blobs<T: EthSpec>(
 }
 
 fn verify_data_availability<T: EthSpec>(
-    blob_sidecars: VariableList<Arc<SignedBlobSidecar<T>>, T::MaxBlobsPerBlock>,
+    blob_sidecars: &VariableList<Arc<SignedBlobSidecar<T>>, T::MaxBlobsPerBlock>,
     kzg_commitments: &[KzgCommitment],
     transactions: &Transactions<T>,
     block_slot: Slot,
@@ -631,7 +633,7 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
                     block,
                     data_availability_handle,
                 }),
-                None => return Err(DataAvailabilityFailure::Block(Some(block), VariableList::empty(), BlobError::BeaconChainError(BeaconChainError::RuntimeShutdown
+                None => return Err(DataAvailabilityFailure::Block(Some(block), blobs, BlobError::BeaconChainError(BeaconChainError::RuntimeShutdown
                 )))
             }
         };
@@ -652,14 +654,8 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
                 .len();
             if kzg_commitments_len == 0 {
                 // check that txns match with empty kzg-commitments
-                if let Err(e) =
-                    verify_blobs::<T::EthSpec>(self.as_block(), VariableList::empty(), &chain.kzg)
-                {
-                    return Err(DataAvailabilityFailure::Block(
-                        Some(block),
-                        VariableList::empty(),
-                        e,
-                    ));
+                if let Err(e) = verify_blobs::<T::EthSpec>(self.as_block(), &blobs, &chain.kzg) {
+                    return Err(DataAvailabilityFailure::Block(Some(block), blobs, e));
                 }
                 return Ok(AvailabilityPendingBlock {
                     block: block.clone(),
@@ -670,7 +666,7 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
                         ))))
                         .ok_or(DataAvailabilityFailure::Block(
                             Some(block),
-                            VariableList::empty(),
+                            blobs,
                             BlobError::BeaconChainError(BeaconChainError::RuntimeShutdown),
                         ))?,
                 });
@@ -684,7 +680,13 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
                         Arc<SignedBlobSidecar<T::EthSpec>>,
                         Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
                     )>(T::EthSpec::max_blobs_per_block()),
-                    Some((_, None)) => panic!(), // receiver has been picked up already this should not happen with RwLock, on failure entry is deleted in `try_into_available_block`
+                    Some((_, None)) => {
+                        return Err(DataAvailabilityFailure::Block(
+                            Some(block),
+                            blobs,
+                            BlobError::Duplicate,
+                        ))
+                    }
                 };
                 channels.insert(block_root, (tx, None));
                 drop(channels);
@@ -752,7 +754,7 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
                         let blobs_cloned = blobs.clone();
                         let kzg_handle = chain_cloned.task_executor.spawn_blocking_handle(
                             move || {
-                                verify_blobs::<T::EthSpec>(&*block_cloned, blobs_cloned, &kzg)
+                                verify_blobs::<T::EthSpec>(&*block_cloned, &blobs_cloned, &kzg)
                             },
                             "kzg_verification",
                         );
@@ -791,11 +793,37 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
                 match data_availability_handle {
                     Some(data_availability_handle) => data_availability_handle,
                     None => {
+                        // remove the channel so an attempt to make a new
+                        // `AvailabilityPendingBlock` won't throw `BlobError::Duplicate`.
+                        let mut blobs = VariableList::empty();
+                        let mut channels = chain.pending_blocks_tx_rx.write();
+                        match channels.remove(&block_root) {
+                            Some((_, Some(mut rx))) => {
+                                loop {
+                                    match rx.try_next() {
+                                        Ok(Some((blob, _))) => {
+                                            blobs.push(blob); // rescue any blobs that may have been sent on the channel.
+                                        }
+                                        Ok(None) => {}
+                                        Err(e) => {
+                                            error!(
+                                                chain.log, "Error adding blobs to Data Availability Failure";
+                                                "block_root" => %block_root,
+                                                "error" => %e
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            None | Some((_, None)) => {}
+                        }
+                        drop(channels);
                         return Err(DataAvailabilityFailure::Block(
                             Some(self.block_cloned()),
-                            VariableList::empty(),
+                            blobs,
                             BlobError::BeaconChainError(BeaconChainError::RuntimeShutdown),
-                        ))
+                        ));
                     }
                 }
             }
@@ -808,7 +836,7 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
                 None => {
                     return Err(DataAvailabilityFailure::Block(
                         None,
-                        VariableList::empty(),
+                        blobs,
                         BlobError::BeaconChainError(BeaconChainError::RuntimeShutdown),
                     ))
                 }

@@ -752,6 +752,8 @@ impl<T: BeaconChainTypes> Worker<T> {
                     "block_root" => block_root,
                     "error" => e
             );
+
+            // todo(emhane) : propagate blob
         }
     }
 
