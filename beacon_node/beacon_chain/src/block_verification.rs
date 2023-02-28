@@ -657,6 +657,8 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
+impl_as_signed_block!(B, GossipVerifiedBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
+
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
 pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> {
@@ -694,6 +696,8 @@ pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T
     pub consensus_context: ConsensusContext<T::EthSpec>,
     pub payload_verification_handle: PayloadVerificationHandle<T::EthSpec>,
 }
+
+impl_as_signed_block!(B, ExecutionPendingBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
 
 /// Implemented on types that can be converted into a `ExecutionPendingBlock`.
 ///

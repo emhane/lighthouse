@@ -15,7 +15,7 @@ pub fn validate_blob_sidecars<T: EthSpec>(
     slot: Slot,
     beacon_block_root: Hash256,
     expected_kzg_commitments: &[KzgCommitment],
-    blob_sidecars: VariableList<Arc<BlobSidecar<T>>, T::MaxBlobsPerBlock>,
+    mut blob_sidecars: VariableList<Arc<BlobSidecar<T>>, T::MaxBlobsPerBlock>,
 ) -> Result<bool, KzgError> {
     if blob_sidecars.len() != expected_kzg_commitments.len() {
         return Ok(false);

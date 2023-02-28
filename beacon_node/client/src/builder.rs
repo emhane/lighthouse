@@ -853,7 +853,7 @@ where
             .build()
             .map_err(|e| format!("Failed to build beacon chain: {}", e))?;
 
-        self.beacon_chain = Some(Arc::new(chain));
+        self.beacon_chain = Some(chain);
         self.beacon_chain_builder = None;
 
         // a beacon chain requires a timer

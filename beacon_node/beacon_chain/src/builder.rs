@@ -616,7 +616,7 @@ where
     pub fn build(
         mut self,
     ) -> Result<
-        BeaconChain<Witness<TSlotClock, TEth1Backend, TEthSpec, THotStore, TColdStore>>,
+        Arc<BeaconChain<Witness<TSlotClock, TEth1Backend, TEthSpec, THotStore, TColdStore>>>,
         String,
     > {
         let log = self.log.ok_or("Cannot build without a logger")?;
@@ -932,10 +932,11 @@ where
             );
         }
 
-        let chain = Arc::new(beacon_chain);
+        let beacon_chain = Arc::new(beacon_chain);
+        let chain = beacon_chain.clone();
         beacon_chain.task_executor.spawn_without_exit(
             async move {
-                let pending_blocks = AvailabilityPendingCache::<
+                let mut pending_blocks = AvailabilityPendingCache::<
                     Witness<TSlotClock, TEth1Backend, TEthSpec, THotStore, TColdStore>,
                 >::new();
                 tokio::pin!(rx);
@@ -945,19 +946,30 @@ where
                         Some(executed_block) = rx.next() => {
                             pending_blocks.push(executed_block);
                         }
-                        Some(Err(e)) = pending_blocks.next() => {
-                            // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
-                        }
-                        Some(Ok(executed_block)) = pending_blocks.next() => {
-                            chain.spawn_blocking_handle(
-                                move || {
-                                    chain.import_block_from_pending_availability_cache(
-                                        executed_block
+                        res = pending_blocks.next() => {
+                            match res {
+                                Some(Err(e)) => {
+                                    // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
+                                    error!(
+                                        chain.log,
+                                        "Availability pending cache failed to receive block";
+                                        "error" => ?e
+                                    );
+                                }
+                                Some(Ok(executed_block)) => {
+                                    let chain_cloned = chain.clone();
+                                    chain.spawn_blocking_handle(
+                                        move || {
+                                            chain_cloned.import_block_from_pending_availability_cache(
+                                                executed_block
+                                            )
+                                        },
+                                        "import_block_from_peding_availability_cache",
                                     )
-                                },
-                                "import_block_from_peding_availability_cache_handle",
-                            )
-                            .await;
+                                    .await;
+                                }
+                                None => {} // AvailabilityPendingCache won't supply this value
+                            }
                         }
                     }
                 }

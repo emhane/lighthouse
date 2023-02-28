@@ -8,8 +8,9 @@ use crate::beacon_proposer_cache::compute_proposer_duties_from_head;
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
-    AsSignedBlock, AvailabilityPendingBlock, AvailableBlock, BlobError, DataAvailabilityFailure,
-    ExecutedBlock, IntoWrappedAvailabilityPendingBlock, TryIntoAvailableBlock,
+    AsSignedBlock, AvailabilityPendingBlock, AvailabilityPendingExecutedBlock, AvailableBlock,
+    BlobError, DataAvailabilityFailure, ExecutedBlock, IntoWrappedAvailabilityPendingBlock,
+    TryIntoAvailableBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
 use crate::block_verification::{
@@ -465,7 +466,7 @@ pub struct BeaconChain<T: BeaconChainTypes> {
 
 #[derive(Default)]
 pub struct AvailabilityPendingCache<T: BeaconChainTypes>(
-    FuturesUnordered<ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>>,
+    FuturesUnordered<AvailabilityPendingExecutedBlock<T>>,
 );
 
 impl<T: BeaconChainTypes> Stream for AvailabilityPendingCache<T> {
@@ -483,7 +484,7 @@ impl<T: BeaconChainTypes> AvailabilityPendingCache<T> {
         AvailabilityPendingCache(FuturesUnordered::new())
     }
     pub fn push(&mut self, block: ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>) {
-        self.0.push(block)
+        self.0.push(AvailabilityPendingExecutedBlock::new(block))
     }
 }
 
