@@ -13,7 +13,7 @@
 use super::MAX_SCHEDULED_WORK_QUEUE_LEN;
 use crate::metrics;
 use crate::sync::manager::BlockProcessType;
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
 use beacon_chain::{BeaconChainTypes, GossipVerifiedBlock, MAXIMUM_GOSSIP_CLOCK_DISPARITY};
 use fnv::FnvHashMap;
 use futures::task::Poll;
@@ -127,7 +127,7 @@ pub struct QueuedLightClientUpdate<T: EthSpec> {
 /// A block that arrived early and has been queued for later import.
 pub struct QueuedGossipBlock<T: BeaconChainTypes> {
     pub peer_id: PeerId,
-    pub block: Box<GossipVerifiedBlock<T>>,
+    pub block: Box<GossipVerifiedBlock<T, SomeAvailabilityBlock<T::EthSpec>>>,
     pub seen_timestamp: Duration,
 }
 
@@ -135,7 +135,7 @@ pub struct QueuedGossipBlock<T: BeaconChainTypes> {
 /// It is queued for later import.
 pub struct QueuedRpcBlock<T: EthSpec> {
     pub block_root: Hash256,
-    pub block: BlockWrapper<T>,
+    pub block: SomeAvailabilityBlock<T>,
     pub process_type: BlockProcessType,
     pub seen_timestamp: Duration,
     /// Indicates if the beacon chain should process this block or not.

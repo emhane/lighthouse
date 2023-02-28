@@ -1,6 +1,8 @@
 use crate::{metrics, service::NetworkMessage, sync::SyncMessage};
 
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
+use beacon_chain::blob_verification::{
+    AsSignedBlock, BlobError, GossipVerifiedBlob, TryIntoAvailableBlock,
+};
 use beacon_chain::store::Error;
 use beacon_chain::{
     attestation_verification::{self, Error as AttnError, VerifiedAttestation},
@@ -10,7 +12,7 @@ use beacon_chain::{
     sync_committee_verification::{self, Error as SyncCommitteeError},
     validator_monitor::get_block_delay_ms,
     BeaconChainError, BeaconChainTypes, BlockError, CountUnrealized, ForkChoiceError,
-    GossipVerifiedBlock, NotifyExecutionLayer, DEFAULT_BLOB_CHANNEL_CAPACITY,
+    GossipVerifiedBlock, NotifyExecutionLayer,
 };
 use futures::channel::{mpsc, oneshot};
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerAction, PeerId, ReportSource};
@@ -19,13 +21,14 @@ use slot_clock::SlotClock;
 use ssz::Encode;
 use std::collections::hash_map::Entry;
 use std::f32::consts::E;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
 use types::{
     Attestation, AttesterSlashing, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate,
     LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock,
-    SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit, Slot, SubnetId,
-    SyncCommitteeMessage, SyncSubnetId,
+    SignedBlobSidecar, SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit,
+    Slot, SubnetId, SyncCommitteeMessage, SyncSubnetId,
 };
 
 use super::{
@@ -648,7 +651,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         }
     }
 
-    pub fn process_gossip_unverified_blob(
+    pub async fn process_gossip_unverified_blob(
         &self,
         message_id: MessageId,
         peer_id: PeerId,
@@ -656,8 +659,10 @@ impl<T: BeaconChainTypes> Worker<T> {
         blob: Arc<SignedBlobSidecar<T::EthSpec>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
-    ) -> Result<(), BlobError<T>> {
+    ) -> Result<(), BlobError<T::EthSpec>> {
         // todo(emhane): verify signature
+        let block_root = blob.beacon_block_root();
+
         let channels = self.chain.pending_blocks_tx_rx.write();
         let tx = match channels.entry(block_root) {
             Entry::Occupied(mut e) => {
@@ -676,8 +681,7 @@ impl<T: BeaconChainTypes> Worker<T> {
                                 Ok(None) => {
                                     // index filtering
                                     if seen_blobs.iter().find(|existing_blob| {
-                                        existing_blob.blob_index()
-                                            == gossip_verified_blob.blob_index()
+                                        existing_blob.blob_index() == blob.blob_index()
                                     }) {
                                         // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
                                     }
@@ -704,12 +708,12 @@ impl<T: BeaconChainTypes> Worker<T> {
                 tx
             }
         };
-        drop(channel);
+        drop(channels);
         // the block has picked up the blob receiver, let it do the index filtering and wait for
         // success notification
-        let (oneshot_tx, oneshot_rx) = mpsc::oneshot::<Result<(), BlobError>>();
-        tx.try_send((gossip_verified_blob, Some(oneshot_tx)))?;
-        match rx_oneshot.try_recv()? {
+        let (tx_notify, rx_notify) = oneshot::channel::<Result<(), BlobError>>();
+        tx.try_send((blob, Some(tx_notify)))?;
+        match rx_notify.await? {
             // todo(emhane): await to give index filtering time
             Some(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
                 // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
@@ -717,27 +721,32 @@ impl<T: BeaconChainTypes> Worker<T> {
             }
             None => Err(BlobError::SendOneshot(block_root)),
         }
+        Ok(GossipVerifiedBlob::new(blob))
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn process_gossip_blob(
+    pub async fn process_gossip_blob(
         self,
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        block: Arc<SignedBeaconBlock<T::EthSpec>>,
+        blob: Arc<SignedBlobSidecar<T::EthSpec>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,
     ) {
-        if let Err(e) = self.process_gossip_unverified_blob(
-            message_id,
-            peer_id,
-            peer_client,
-            block,
-            reprocess_tx.clone(),
-            seen_duration,
-        ) {
+        if let Err(e) = self
+            .process_gossip_unverified_blob(
+                message_id,
+                peer_id,
+                peer_client,
+                blob,
+                reprocess_tx.clone(),
+                seen_duration,
+            )
+            .await
+        {
+            let block_root = blob.beacon_block_root();
             error!(
                     self.log, "Failed to verify blob for gossip";
                     "block_root" => block_root,
@@ -754,12 +763,12 @@ impl<T: BeaconChainTypes> Worker<T> {
     ///
     /// Raises a log if there are errors.
     #[allow(clippy::too_many_arguments)]
-    pub async fn process_gossip_block(
+    pub async fn process_gossip_block<B: TryIntoAvailableBlock<T>>(
         self,
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        block: BlockWrapper<T::EthSpec>,
+        block: B,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,
@@ -801,15 +810,15 @@ impl<T: BeaconChainTypes> Worker<T> {
     /// if it passes gossip propagation criteria, tell the network thread to forward it.
     ///
     /// Returns the `GossipVerifiedBlock` if verification passes and raises a log if there are errors.
-    pub async fn process_gossip_unverified_block(
+    pub async fn process_gossip_unverified_block<B: TryIntoAvailableBlock<T>>(
         &self,
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        block: BlockWrapper<T::EthSpec>,
+        block: B,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
-    ) -> Option<GossipVerifiedBlock<T>> {
+    ) -> Option<GossipVerifiedBlock<T, B>> {
         let block_delay =
             get_block_delay_ms(seen_duration, block.message(), &self.chain.slot_clock);
         // Log metrics to track delay from other nodes on the network.
@@ -1045,10 +1054,10 @@ impl<T: BeaconChainTypes> Worker<T> {
     /// Process the beacon block that has already passed gossip verification.
     ///
     /// Raises a log if there are errors.
-    pub async fn process_gossip_verified_block(
+    pub async fn process_gossip_verified_block<B: TryIntoAvailableBlock<T>>(
         self,
         peer_id: PeerId,
-        verified_block: GossipVerifiedBlock<T>,
+        verified_block: GossipVerifiedBlock<T, B>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         // This value is not used presently, but it might come in handy for debugging.
         _seen_duration: Duration,
@@ -1569,7 +1578,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         };
     }
 
-    pub fn process_gossip_optimistic_update(
+    pub fn process_gossip_optimistic_update<B: TryIntoAvailableBlock<T>>(
         self,
         message_id: MessageId,
         peer_id: PeerId,

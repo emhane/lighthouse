@@ -1,5 +1,5 @@
 use super::RootBlockTuple;
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
 use beacon_chain::BeaconChainTypes;
 use lighthouse_network::PeerId;
 use store::Hash256;
@@ -60,7 +60,11 @@ impl<T: BeaconChainTypes> ParentLookup<T> {
             .any(|(root, _d_block)| root == block_root)
     }
 
-    pub fn new(block_root: Hash256, block: BlockWrapper<T::EthSpec>, peer_id: PeerId) -> Self {
+    pub fn new(
+        block_root: Hash256,
+        block: SomeAvailabilityBlock<T::EthSpec>,
+        peer_id: PeerId,
+    ) -> Self {
         let current_parent_request = SingleBlockRequest::new(block.parent_root(), peer_id);
 
         Self {
@@ -99,7 +103,7 @@ impl<T: BeaconChainTypes> ParentLookup<T> {
         self.current_parent_request.check_peer_disconnected(peer_id)
     }
 
-    pub fn add_block(&mut self, block: BlockWrapper<T::EthSpec>) {
+    pub fn add_block(&mut self, block: SomeAvailabilityBlock<T::EthSpec>) {
         let next_parent = block.parent_root();
         let current_root = self.current_parent_request.hash;
         self.downloaded_blocks.push((current_root, block));
@@ -118,7 +122,7 @@ impl<T: BeaconChainTypes> ParentLookup<T> {
         self,
     ) -> (
         Hash256,
-        Vec<BlockWrapper<T::EthSpec>>,
+        Vec<SomeAvailabilityBlock<T::EthSpec>>,
         Vec<Hash256>,
         SingleBlockRequest<PARENT_FAIL_TOLERANCE>,
     ) {
@@ -157,7 +161,7 @@ impl<T: BeaconChainTypes> ParentLookup<T> {
     /// the processing result of the block.
     pub fn verify_block(
         &mut self,
-        block: Option<BlockWrapper<T::EthSpec>>,
+        block: Option<SomeAvailabilityBlock<T::EthSpec>>,
         failed_chains: &mut lru_cache::LRUTimeCache<Hash256>,
     ) -> Result<Option<RootBlockTuple<T::EthSpec>>, VerifyError> {
         let root_and_block = self.current_parent_request.verify_block(block)?;

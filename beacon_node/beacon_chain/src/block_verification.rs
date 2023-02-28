@@ -45,7 +45,7 @@
 //! ```
 use crate::blob_verification::{
     AsSignedBlock, AvailabilityPendingBlock, AvailableBlock, BlobError, DataAvailabilityFailure,
-    TryIntoAvailableBlock,
+    IntoWrappedAvailabilityPendingBlock, SomeAvailabilityBlock, TryIntoAvailableBlock,
 };
 use crate::eth1_finalization_cache::Eth1FinalizationData;
 use crate::execution_payload::{
@@ -62,7 +62,7 @@ use crate::{
     },
     metrics, BeaconChain, BeaconChainError, BeaconChainTypes,
 };
-use crate::{impl_as_signed_block, impl_wrap_type_in_variant};
+use crate::{impl_as_signed_block, impl_from};
 use derivative::Derivative;
 use eth2::types::EventKind;
 use execution_layer::PayloadStatus;
@@ -302,21 +302,8 @@ pub enum BlockError<T: EthSpec> {
     BlockMovedToAvailabilityPendingCache,
 }
 
-impl_wrap_type_in_variant!(<T: EthSpec,>, BlobError<T>, BlockError<T>, Self::BlobValidation);
-impl_wrap_type_in_variant!(<T: EthSpec,>, DataAvailabilityFailure<T>, BlockError<T>, Self::DataAvailability);
-
-// todo(emhane): why is load_parent check done before block is verified as ready for import to
-// fork choice?
-#[derive(Debug)]
-pub enum SomeAvailabilityBlock<T: EthSpec> {
-    Availabile(AvailableBlock<T>),
-    AvailabilityPending(AvailabilityPendingBlock<T>),
-    RawBlock(Arc<SignedBeaconBlock<T>>),
-}
-
-impl_wrap_type_in_variant!(<T: EthSpec,>, AvailableBlock<T>, SomeAvailabilityBlock<T>, Self::Availabile);
-impl_wrap_type_in_variant!(<T: EthSpec,>, AvailabilityPendingBlock<T>, SomeAvailabilityBlock<T>, Self::AvailabilityPending);
-impl_wrap_type_in_variant!(<T: EthSpec,>, Arc<SignedBeaconBlock<T>>, SomeAvailabilityBlock<T>, Self::RawBlock);
+impl_from!(<T: EthSpec,>, BlobError<T>, BlockError<T>, Self::BlobValidation);
+impl_from!(<T: EthSpec,>, DataAvailabilityFailure<T>, BlockError<T>, Self::DataAvailability);
 
 /// Returned when block validation failed due to some issue verifying
 /// the execution payload.
@@ -659,6 +646,47 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>
 
 impl_as_signed_block!(B, GossipVerifiedBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
 
+impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
+    for GossipVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>
+{
+    type Block = Self;
+    fn wrap_into_availability_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+    ) -> Result<Self::Block, DataAvailabilityFailure<T::EthSpec>> {
+        Ok(self)
+    }
+}
+impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
+    for GossipVerifiedBlock<T, Arc<SignedBeaconBlock<T::EthSpec>>>
+{
+    type Block = GossipVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>;
+    fn wrap_into_availability_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+    ) -> Result<Self::Block, DataAvailabilityFailure<T::EthSpec>> {
+        let GossipVerifiedBlock {
+            block,
+            block_root,
+            parent,
+            consensus_context,
+        } = self;
+        let availability_pending_block = block.into_availability_pending_block(
+            block_root,
+            chain,
+            Vec::with_capacity(T::EthSpec::max_blobs_per_block()).into(),
+        )?;
+        Ok(GossipVerifiedBlock {
+            block: availability_pending_block,
+            block_root,
+            parent,
+            consensus_context,
+        })
+    }
+}
+
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
 pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> {
@@ -669,6 +697,47 @@ pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<
 }
 
 impl_as_signed_block!(B, SignatureVerifiedBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
+
+impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
+    for SignatureVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>
+{
+    type Block = Self;
+    fn wrap_into_availability_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+    ) -> Result<Self::Block, DataAvailabilityFailure<T::EthSpec>> {
+        Ok(self)
+    }
+}
+impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
+    for SignatureVerifiedBlock<T, Arc<SignedBeaconBlock<T::EthSpec>>>
+{
+    type Block = SignatureVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>;
+    fn wrap_into_availability_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+    ) -> Result<Self::Block, DataAvailabilityFailure<T::EthSpec>> {
+        let SignatureVerifiedBlock {
+            block,
+            block_root,
+            parent,
+            consensus_context,
+        } = self;
+        let availability_pending_block = block.into_availability_pending_block(
+            block_root,
+            chain,
+            Vec::with_capacity(T::EthSpec::max_blobs_per_block()).into(),
+        )?;
+        Ok(SignatureVerifiedBlock {
+            block: availability_pending_block,
+            block_root,
+            parent,
+            consensus_context,
+        })
+    }
+}
 
 /// Used to await the result of executing payload with a remote EE.
 type PayloadVerificationHandle<E> =
@@ -698,6 +767,56 @@ pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T
 }
 
 impl_as_signed_block!(B, ExecutionPendingBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
+
+impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
+    for ExecutionPendingBlock<T, AvailabilityPendingBlock<T::EthSpec>>
+{
+    type Block = Self;
+    fn wrap_into_availability_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+    ) -> Result<Self::Block, DataAvailabilityFailure<T::EthSpec>> {
+        Ok(self)
+    }
+}
+impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
+    for ExecutionPendingBlock<T, Arc<SignedBeaconBlock<T::EthSpec>>>
+{
+    type Block = ExecutionPendingBlock<T, AvailabilityPendingBlock<T::EthSpec>>;
+    fn wrap_into_availability_pending_block(
+        self,
+        block_root: Hash256,
+        chain: &Arc<BeaconChain<T>>,
+    ) -> Result<Self::Block, DataAvailabilityFailure<T::EthSpec>> {
+        let ExecutionPendingBlock {
+            block,
+            block_root,
+            state,
+            parent_block,
+            parent_eth1_finalization_data,
+            confirmed_state_roots,
+            consensus_context,
+            payload_verification_handle,
+        } = self;
+        // If this block is already wraps an availability-pending block nothing changes.
+        let availability_pending_block = block.into_availability_pending_block(
+            block_root,
+            chain,
+            Vec::with_capacity(T::EthSpec::max_blobs_per_block()).into(),
+        )?;
+        Ok(ExecutionPendingBlock {
+            block: availability_pending_block,
+            block_root,
+            state,
+            parent_block,
+            parent_eth1_finalization_data,
+            confirmed_state_roots,
+            consensus_context,
+            payload_verification_handle,
+        })
+    }
+}
 
 /// Implemented on types that can be converted into a `ExecutionPendingBlock`.
 ///

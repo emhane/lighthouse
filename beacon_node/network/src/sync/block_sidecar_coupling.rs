@@ -1,4 +1,4 @@
-use beacon_chain::blob_verification::BlockWrapper;
+use beacon_chain::blob_verification::SomeAvailabilityBlock;
 use std::{collections::VecDeque, sync::Arc};
 
 use types::{BlobsSidecar, EthSpec, SignedBeaconBlock};
@@ -30,7 +30,7 @@ impl<T: EthSpec> BlocksAndBlobsRequestInfo<T> {
         }
     }
 
-    pub fn into_responses(self) -> Result<Vec<BlockWrapper<T>>, &'static str> {
+    pub fn into_responses(self) -> Result<Vec<SomeAvailabilityBlock<T>>, &'static str> {
         let BlocksAndBlobsRequestInfo {
             accumulated_blocks,
             mut accumulated_sidecars,
@@ -48,9 +48,9 @@ impl<T: EthSpec> BlocksAndBlobsRequestInfo<T> {
                     .unwrap_or(false)
                 {
                     let blobs_sidecar = accumulated_sidecars.pop_front();
-                    BlockWrapper::new(beacon_block, blobs_sidecar)
+                    SomeAvailabilityBlock::new(beacon_block, blobs_sidecar)
                 } else {
-                    BlockWrapper::new(beacon_block, None)
+                    SomeAvailabilityBlock::new(beacon_block, None)
                 }
             })
             .collect::<Vec<_>>();

@@ -8,7 +8,7 @@ use crate::beacon_processor::WorkEvent;
 use crate::service::{NetworkMessage, RequestId};
 use crate::status::ToStatusMessage;
 use crate::sync::block_lookups::ForceBlockRequest;
-use beacon_chain::blob_verification::BlockWrapper;
+use beacon_chain::blob_verification::SomeAvailabilityBlock;
 use beacon_chain::{BeaconChain, BeaconChainTypes, EngineState};
 use fnv::FnvHashMap;
 use lighthouse_network::rpc::methods::BlobsByRangeRequest;
@@ -293,7 +293,7 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
     ) -> Option<(
         ChainId,
         BatchId,
-        Result<Vec<BlockWrapper<T::EthSpec>>, &'static str>,
+        Result<Vec<SomeAvailabilityBlock<T::EthSpec>>, &'static str>,
     )> {
         match self.range_blocks_and_blobs_requests.entry(request_id) {
             Entry::Occupied(mut entry) => {
@@ -362,7 +362,10 @@ impl<T: BeaconChainTypes> SyncNetworkContext<T> {
         &mut self,
         request_id: Id,
         block_or_blob: BlockOrBlobs<T::EthSpec>,
-    ) -> Option<(BatchId, Result<Vec<BlockWrapper<T::EthSpec>>, &'static str>)> {
+    ) -> Option<(
+        BatchId,
+        Result<Vec<SomeAvailabilityBlock<T::EthSpec>>, &'static str>,
+    )> {
         match self.backfill_blocks_and_blobs_requests.entry(request_id) {
             Entry::Occupied(mut entry) => {
                 let (_, info) = entry.get_mut();

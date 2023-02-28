@@ -7,7 +7,7 @@ use crate::beacon_processor::DuplicateCache;
 use crate::metrics;
 use crate::sync::manager::{BlockProcessType, SyncMessage};
 use crate::sync::{BatchProcessResult, ChainId};
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper, TryIntoAvailableBlock};
+use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock, TryIntoAvailableBlock};
 use beacon_chain::CountUnrealized;
 use beacon_chain::{
     BeaconChainError, BeaconChainTypes, BlockError, ChainSegmentResult, HistoricalBlockError,
@@ -44,7 +44,7 @@ impl<T: BeaconChainTypes> Worker<T> {
     pub async fn process_rpc_block(
         self,
         block_root: Hash256,
-        block: BlockWrapper<T::EthSpec>,
+        block: SomeAvailabilityBlock<T::EthSpec>,
         seen_timestamp: Duration,
         process_type: BlockProcessType,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
@@ -145,7 +145,7 @@ impl<T: BeaconChainTypes> Worker<T> {
     pub async fn process_chain_segment(
         &self,
         sync_type: ChainSegmentProcessId,
-        downloaded_blocks: Vec<BlockWrapper<T::EthSpec>>,
+        downloaded_blocks: Vec<SomeAvailabilityBlock<T::EthSpec>>,
         notify_execution_layer: NotifyExecutionLayer,
     ) {
         let result = match sync_type {
@@ -429,7 +429,7 @@ impl<T: BeaconChainTypes> Worker<T> {
     }
 
     /// Helper function to handle a `BlockError` from `process_chain_segment`
-    fn handle_failed_chain_segment(&self, error: BlockError<T>) -> Result<(), ChainSegmentFailed> {
+    fn handle_failed_chain_segment(&self, error: BlockError<T::EthSpec>) -> Result<(), ChainSegmentFailed> {
         match error {
             BlockError::ParentUnknown(block) => {
                 let block = block.0;

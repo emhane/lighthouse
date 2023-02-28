@@ -42,7 +42,7 @@ use crate::beacon_processor::{ChainSegmentProcessId, WorkEvent as BeaconWorkEven
 use crate::service::NetworkMessage;
 use crate::status::ToStatusMessage;
 use crate::sync::range_sync::ByRangeRequestType;
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
 use beacon_chain::{BeaconChain, BeaconChainTypes, BlockError, EngineState};
 use futures::StreamExt;
 use lighthouse_network::rpc::methods::MAX_REQUEST_BLOCKS;
@@ -119,7 +119,7 @@ pub enum SyncMessage<T: EthSpec> {
     },
 
     /// A block with an unknown parent has been received.
-    UnknownBlock(PeerId, BlockWrapper<T>, Hash256),
+    UnknownBlock(PeerId, SomeAvailabilityBlock<T>, Hash256),
 
     /// A peer has sent an object that references a block that is unknown. This triggers the
     /// manager to attempt to find the block matching the unknown hash.

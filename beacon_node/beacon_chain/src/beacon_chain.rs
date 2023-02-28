@@ -484,7 +484,7 @@ impl<T: BeaconChainTypes> AvailabilityPendingCache<T> {
         AvailabilityPendingCache(FuturesUnordered::new())
     }
     pub fn push(&mut self, block: ExecutedBlock<T, AvailabilityPendingBlock<T::EthSpec>>) {
-        self.0.push(AvailabilityPendingExecutedBlock::new(block))
+        self.0.push(Box::new(block).into())
     }
 }
 

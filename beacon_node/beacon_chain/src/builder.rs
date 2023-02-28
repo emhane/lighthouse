@@ -952,13 +952,13 @@ where
                                     // todo(emhane): deal with timeout error, like get on rpc...let unknown parent trigger get block if doesn't come. and remove cached senders at time bound or lru.
                                     error!(
                                         chain.log,
-                                        "Availability pending cache failed to receive block";
+                                        "Failed to receive block from block";
                                         "error" => ?e
                                     );
                                 }
                                 Some(Ok(executed_block)) => {
                                     let chain_cloned = chain.clone();
-                                    chain.spawn_blocking_handle(
+                                    if let Err(e) = chain.spawn_blocking_handle(
                                         move || {
                                             chain_cloned.import_block_from_pending_availability_cache(
                                                 executed_block
@@ -966,7 +966,12 @@ where
                                         },
                                         "import_block_from_peding_availability_cache",
                                     )
-                                    .await;
+                                    .await {
+                                        error!(
+                                            chain.log, "Error importing executed block";
+                                            "error" => ?e,
+                                        );
+                                    }
                                 }
                                 None => {} // AvailabilityPendingCache won't supply this value
                             }

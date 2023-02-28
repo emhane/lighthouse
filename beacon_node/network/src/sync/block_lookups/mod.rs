@@ -2,7 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
 use beacon_chain::{BeaconChainTypes, BlockError};
 use fnv::FnvHashMap;
 use lighthouse_network::rpc::{RPCError, RPCResponseErrorCode};
@@ -33,7 +33,7 @@ mod single_block_lookup;
 #[cfg(test)]
 mod tests;
 
-pub type RootBlockTuple<T> = (Hash256, BlockWrapper<T>);
+pub type RootBlockTuple<T> = (Hash256, SomeAvailabilityBlock<T>);
 
 const FAILED_CHAINS_CACHE_EXPIRY_SECONDS: u64 = 60;
 const SINGLE_BLOCK_LOOKUP_MAX_ATTEMPTS: u8 = 3;
@@ -137,7 +137,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
     pub fn search_parent(
         &mut self,
         block_root: Hash256,
-        block: BlockWrapper<T::EthSpec>,
+        block: SomeAvailabilityBlock<T::EthSpec>,
         peer_id: PeerId,
         cx: &mut SyncNetworkContext<T>,
     ) {
@@ -179,7 +179,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
         &mut self,
         id: Id,
         peer_id: PeerId,
-        block: Option<BlockWrapper<T::EthSpec>>,
+        block: Option<SomeAvailabilityBlock<T::EthSpec>>,
         seen_timestamp: Duration,
         cx: &mut SyncNetworkContext<T>,
     ) {
@@ -244,7 +244,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
         &mut self,
         id: Id,
         peer_id: PeerId,
-        block: Option<BlockWrapper<T::EthSpec>>,
+        block: Option<SomeAvailabilityBlock<T::EthSpec>>,
         seen_timestamp: Duration,
         cx: &mut SyncNetworkContext<T>,
     ) {
@@ -686,7 +686,7 @@ impl<T: BeaconChainTypes> BlockLookups<T> {
     fn send_block_for_processing(
         &mut self,
         block_root: Hash256,
-        block: BlockWrapper<T::EthSpec>,
+        block: SomeAvailabilityBlock<T::EthSpec>,
         duration: Duration,
         process_type: BlockProcessType,
         cx: &mut SyncNetworkContext<T>,

@@ -3,7 +3,7 @@ use crate::beacon_processor::{ChainSegmentProcessId, WorkEvent as BeaconWorkEven
 use crate::sync::{
     manager::Id, network_context::SyncNetworkContext, BatchOperationOutcome, BatchProcessResult,
 };
-use beacon_chain::blob_verification::BlockWrapper;
+use beacon_chain::blob_verification::SomeAvailabilityBlock;
 use beacon_chain::{BeaconChainTypes, CountUnrealized};
 use fnv::FnvHashMap;
 use lighthouse_network::{PeerAction, PeerId};
@@ -231,7 +231,7 @@ impl<T: BeaconChainTypes> SyncingChain<T> {
         batch_id: BatchId,
         peer_id: &PeerId,
         request_id: Id,
-        beacon_block: Option<BlockWrapper<T::EthSpec>>,
+        beacon_block: Option<SomeAvailabilityBlock<T::EthSpec>>,
     ) -> ProcessingResult {
         // check if we have this batch
         let batch = match self.batches.get_mut(&batch_id) {

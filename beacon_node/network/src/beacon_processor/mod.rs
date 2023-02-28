@@ -40,7 +40,7 @@
 
 use crate::sync::manager::BlockProcessType;
 use crate::{metrics, service::NetworkMessage, sync::SyncMessage};
-use beacon_chain::blob_verification::BlockWrapper;
+use beacon_chain::blob_verification::SomeAvailabilityBlock;
 use beacon_chain::parking_lot::Mutex;
 use beacon_chain::{BeaconChain, BeaconChainTypes, GossipVerifiedBlock, NotifyExecutionLayer};
 use derivative::Derivative;
@@ -605,7 +605,7 @@ impl<T: BeaconChainTypes> WorkEvent<T> {
     /// sent to the other side of `result_tx`.
     pub fn rpc_beacon_block(
         block_root: Hash256,
-        block: BlockWrapper<T::EthSpec>,
+        block: SomeAvailabilityBlock<T::EthSpec>,
         seen_timestamp: Duration,
         process_type: BlockProcessType,
     ) -> Self {
@@ -624,7 +624,7 @@ impl<T: BeaconChainTypes> WorkEvent<T> {
     /// Create a new work event to import `blocks` as a beacon chain segment.
     pub fn chain_segment(
         process_id: ChainSegmentProcessId,
-        blocks: Vec<BlockWrapper<T::EthSpec>>,
+        blocks: Vec<SomeAvailabilityBlock<T::EthSpec>>,
     ) -> Self {
         Self {
             drop_during_sync: false,
@@ -866,7 +866,7 @@ pub enum Work<T: BeaconChainTypes> {
     },
     DelayedImportBlock {
         peer_id: PeerId,
-        block: Box<GossipVerifiedBlock<T>>,
+        block: Box<GossipVerifiedBlock<T, SomeAvailabilityBlock<T::EthSpec>>>,
         seen_timestamp: Duration,
     },
     GossipVoluntaryExit {
@@ -911,14 +911,14 @@ pub enum Work<T: BeaconChainTypes> {
     },
     RpcBlock {
         block_root: Hash256,
-        block: BlockWrapper<T::EthSpec>,
+        block: SomeAvailabilityBlock<T::EthSpec>,
         seen_timestamp: Duration,
         process_type: BlockProcessType,
         should_process: bool,
     },
     ChainSegment {
         process_id: ChainSegmentProcessId,
-        blocks: Vec<BlockWrapper<T::EthSpec>>,
+        blocks: Vec<SomeAvailabilityBlock<T::EthSpec>>,
     },
     Status {
         peer_id: PeerId,

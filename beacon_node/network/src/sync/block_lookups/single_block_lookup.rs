@@ -1,5 +1,5 @@
 use super::RootBlockTuple;
-use beacon_chain::blob_verification::{AsSignedBlock, BlockWrapper};
+use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
 use beacon_chain::get_block_root;
 use lighthouse_network::{rpc::BlocksByRootRequest, PeerId};
 use rand::seq::IteratorRandom;
@@ -104,7 +104,7 @@ impl<const MAX_ATTEMPTS: u8> SingleBlockRequest<MAX_ATTEMPTS> {
     /// Returns the block for processing if the response is what we expected.
     pub fn verify_block<T: EthSpec>(
         &mut self,
-        block: Option<BlockWrapper<T>>,
+        block: Option<SomeAvailabilityBlock<T>>,
     ) -> Result<Option<RootBlockTuple<T>>, VerifyError> {
         match self.state {
             State::AwaitingDownload => {
