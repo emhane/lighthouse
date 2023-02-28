@@ -1058,7 +1058,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         self,
         peer_id: PeerId,
         verified_block: GossipVerifiedBlock<T, B>,
-        reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
+        reprocess_tx: tokio::sync::mpsc::Sender<ReprocessQueueMessage<T>>,
         // This value is not used presently, but it might come in handy for debugging.
         _seen_duration: Duration,
     ) {
