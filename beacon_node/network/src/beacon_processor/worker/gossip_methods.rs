@@ -14,7 +14,7 @@ use beacon_chain::{
     BeaconChainError, BeaconChainTypes, BlockError, CountUnrealized, ForkChoiceError,
     GossipVerifiedBlock, NotifyExecutionLayer,
 };
-use futures::channel::{mpsc, oneshot};
+use futures::channel::{mpsc as futuresmpsc, oneshot};
 use lighthouse_network::{Client, MessageAcceptance, MessageId, PeerAction, PeerId, ReportSource};
 use slog::{crit, debug, error, info, trace, warn};
 use slot_clock::SlotClock;
@@ -24,6 +24,7 @@ use std::f32::consts::E;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
+use tokio::sync::mpsc;
 use types::{
     Attestation, AttesterSlashing, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate,
     LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock,
@@ -659,7 +660,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         blob: Arc<SignedBlobSidecar<T::EthSpec>>,
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         seen_duration: Duration,
-    ) -> Result<(), BlobError<T::EthSpec>> {
+    ) -> Result<GossipVerifiedBlob<T::EthSpec>, BlobError<T::EthSpec>> {
         // todo(emhane): verify signature
         let block_root = blob.beacon_block_root();
 
@@ -680,9 +681,11 @@ impl<T: BeaconChainTypes> Worker<T> {
                                 }
                                 Ok(None) => {
                                     // index filtering
-                                    if seen_blobs.iter().find(|existing_blob| {
-                                        existing_blob.blob_index() == blob.blob_index()
-                                    }) {
+                                    if let Some(duplicate_blob) =
+                                        seen_blobs.iter().find(|existing_blob| {
+                                            existing_blob.blob_index() == blob.blob_index()
+                                        })
+                                    {
                                         // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
                                     }
                                     // and put the blobs back when done
@@ -700,9 +703,9 @@ impl<T: BeaconChainTypes> Worker<T> {
                 }
             }
             Entry::Vacant(e) => {
-                let (tx, rx) = mpsc::channel::<(
+                let (tx, rx) = futuresmpsc::channel::<(
                     Arc<SignedBlobSidecar<T::EthSpec>>,
-                    Option<oneshot::Sender<Result<(), BlobError<T>>>>,
+                    Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
                 )>(T::EthSpec::max_blobs_per_block());
                 channels.insert(block_root, (tx.clone(), Some(rx)));
                 tx
@@ -721,7 +724,7 @@ impl<T: BeaconChainTypes> Worker<T> {
             }
             None => Err(BlobError::SendOneshot(block_root)),
         }
-        Ok(GossipVerifiedBlob::new(blob))
+        Ok(blob.into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -735,6 +738,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         duplicate_cache: DuplicateCache,
         seen_duration: Duration,
     ) {
+        let block_root = blob.message().beacon_block_root;
         if let Err(e) = self
             .process_gossip_unverified_blob(
                 message_id,
@@ -746,11 +750,10 @@ impl<T: BeaconChainTypes> Worker<T> {
             )
             .await
         {
-            let block_root = blob.beacon_block_root();
             error!(
                     self.log, "Failed to verify blob for gossip";
-                    "block_root" => block_root,
-                    "error" => e
+                    "block_root" => %block_root,
+                    "error" => ?e
             );
 
             // todo(emhane) : propagate blob
@@ -1060,7 +1063,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         self,
         peer_id: PeerId,
         verified_block: GossipVerifiedBlock<T, B>,
-        reprocess_tx: tokio::sync::mpsc::Sender<ReprocessQueueMessage<T>>,
+        reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         // This value is not used presently, but it might come in handy for debugging.
         _seen_duration: Duration,
     ) {

@@ -644,7 +644,7 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
-impl_as_signed_block!(B, GossipVerifiedBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
+impl_as_signed_block!(B: TryIntoAvailableBlock<T,>, GossipVerifiedBlock<T, B>, B, .block);
 
 impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
     for GossipVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>
@@ -696,7 +696,7 @@ pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<
     consensus_context: ConsensusContext<T::EthSpec>,
 }
 
-impl_as_signed_block!(B, SignatureVerifiedBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
+impl_as_signed_block!(B: TryIntoAvailableBlock<T,>, SignatureVerifiedBlock<T, B>, B, .block);
 
 impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
     for SignatureVerifiedBlock<T, AvailabilityPendingBlock<T::EthSpec>>
@@ -766,7 +766,7 @@ pub struct ExecutionPendingBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T
     pub payload_verification_handle: PayloadVerificationHandle<T::EthSpec>,
 }
 
-impl_as_signed_block!(B, ExecutionPendingBlock<T, B>, .block, B: TryIntoAvailableBlock<T,>);
+impl_as_signed_block!(B: TryIntoAvailableBlock<T,>, ExecutionPendingBlock<T, B>, B, .block);
 
 impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
     for ExecutionPendingBlock<T, AvailabilityPendingBlock<T::EthSpec>>
