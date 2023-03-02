@@ -3,7 +3,7 @@ use bls::Signature;
 use derivative::Derivative;
 use serde_derive::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
-use std::fmt;
+use std::{fmt, fmt::Debug, sync::Arc};
 use superstruct::superstruct;
 use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
@@ -524,6 +524,48 @@ impl<E: EthSpec> From<SignedBeaconBlock<E>> for SignedBlindedBeaconBlock<E> {
 impl<E: EthSpec> SignedBeaconBlock<E> {
     pub fn clone_as_blinded(&self) -> SignedBlindedBeaconBlock<E> {
         SignedBeaconBlock::from_block(self.message().into(), self.signature().clone())
+    }
+}
+
+pub trait AsSignedBlock<T: EthSpec>: Debug {
+    fn block_root(&self) -> Hash256;
+    fn slot(&self) -> Slot;
+    fn epoch(&self) -> Epoch;
+    fn parent_root(&self) -> Hash256;
+    fn state_root(&self) -> Hash256;
+    fn signed_block_header(&self) -> SignedBeaconBlockHeader;
+    fn message(&self) -> BeaconBlockRef<T>;
+    fn as_block(&self) -> &SignedBeaconBlock<T>;
+    fn block_cloned(&self) -> Arc<SignedBeaconBlock<T>>;
+}
+
+impl<T: EthSpec> AsSignedBlock<T> for Arc<SignedBeaconBlock<T>> {
+    fn block_root(&self) -> Hash256 {
+        self.block_root()
+    }
+    fn slot(&self) -> Slot {
+        self.slot()
+    }
+    fn epoch(&self) -> Epoch {
+        self.epoch()
+    }
+    fn parent_root(&self) -> Hash256 {
+        self.parent_root()
+    }
+    fn state_root(&self) -> Hash256 {
+        self.state_root()
+    }
+    fn signed_block_header(&self) -> SignedBeaconBlockHeader {
+        self.signed_block_header()
+    }
+    fn message(&self) -> BeaconBlockRef<T> {
+        self.message()
+    }
+    fn as_block(&self) -> &SignedBeaconBlock<T> {
+        &*self
+    }
+    fn block_cloned(&self) -> Arc<SignedBeaconBlock<T>> {
+        self.clone()
     }
 }
 

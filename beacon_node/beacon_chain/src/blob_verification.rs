@@ -1,6 +1,7 @@
 use crate::beacon_chain::{BeaconChain, BeaconChainTypes, MAXIMUM_GOSSIP_CLOCK_DISPARITY};
 use crate::block_verification::{BlockError, IntoExecutionPendingBlock};
 use crate::{eth1_finalization_cache::Eth1FinalizationData, kzg_utils, BeaconChainError};
+use crate::{impl_as_signed_blob_sidecar, impl_as_signed_block};
 use derivative::Derivative;
 use fork_choice::{CountUnrealized, PayloadVerificationStatus};
 use futures::{
@@ -31,10 +32,13 @@ use std::{
 use tokio::{task::JoinHandle, time::Duration};
 use types::signed_beacon_block::BlobReconstructionError;
 use types::{
+    AsSignedBlobSidecar, AsSignedBlock, BeaconState, Blob, Epoch, ExecPayload, KzgProof,
+    SignedBlindedBeaconBlock,
+};
+use types::{
     BeaconBlockRef, BeaconStateError, EthSpec, Hash256, KzgCommitment, SignedBeaconBlock,
     SignedBeaconBlockHeader, SignedBlobSidecar, Slot, Transactions,
 };
-use types::{BeaconState, Blob, Epoch, ExecPayload, KzgProof, SignedBlindedBeaconBlock};
 
 pub const DEFAULT_DATA_AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -159,11 +163,12 @@ impl<T: EthSpec> From<BeaconStateError> for BlobError<T> {
 
 /// A wrapper around a [`SignedBlobSidecar`] that indicates it has been approved for re-gossiping
 /// on the p2p network.
+#[derive(Debug)]
 pub struct GossipVerifiedBlob<T: EthSpec>(Arc<SignedBlobSidecar<T>>);
-
 impl_from!(<T: EthSpec,>, Arc<SignedBlobSidecar<T>>, GossipVerifiedBlob<T>, GossipVerifiedBlob);
+impl_as_signed_blob_sidecar!(, GossipVerifiedBlob<E>, Arc<SignedBlobSidecar<E>>, .0);
 
-pub fn validate_blob_for_gossip<T: BeaconChainTypes, B: AsSignedBlock<T>>(
+pub fn validate_blob_for_gossip<T: BeaconChainTypes, B: AsSignedBlock<T::EthSpec>>(
     block: B,
     block_root: Hash256,
     chain: &Arc<BeaconChain<T>>,
@@ -273,9 +278,9 @@ impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
 
 /// Reconstructs a block with metadata to update its inner block to an
 /// [`AvailabilityPendingBlock`].
-pub trait IntoWrappedAvailabilityPendingBlock<T: BeaconChainTypes>: AsSignedBlock<T> {
+pub trait IntoWrappedAvailabilityPendingBlock<T: BeaconChainTypes>: AsSignedBlock<T::EthSpec> {
     type Block: IntoExecutionPendingBlock<T, AvailabilityPendingBlock<T::EthSpec>>
-        + AsSignedBlock<T>;
+        + AsSignedBlock<T::EthSpec>;
     fn wrap_into_availability_pending_block(
         self,
         block_root: Hash256,
@@ -359,9 +364,7 @@ impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailableBlock<T::EthSpec
         >,
     ) -> Result<AvailabilityPendingBlock<T::EthSpec>, DataAvailabilityFailure<T::EthSpec>> {
         let block =
-            <AvailableBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::block_cloned(
-                &self,
-            );
+            self.block_cloned();
         let data_availability_handle = match chain.task_executor.spawn_handle_mock(Ok(self)) {
             Some(handle) => handle,
             None => {
@@ -393,7 +396,7 @@ impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<
                 self,
             )));
         }
-        let block_root = <AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::block_root(&self);
+        let block_root = self.block_root();
         let chain_cloned = chain.clone();
         let availability_result_handle = chain.task_executor.spawn_handle(async move {
             match self.data_availability_handle.await {
@@ -554,9 +557,9 @@ impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for Arc<SignedBeaconBlock<T::
 /// wrapping metadata along with a block implementing this trait, for that use the trait
 /// [`IntoWrappedAvailabilityPendingBlock`] as otherwise the metadata will be lost.
 pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
-    AsSignedBlock<T>
+    AsSignedBlock<T::EthSpec>
     + Sized
-    + AsSignedBlock<T>
+    + AsSignedBlock<T::EthSpec>
     + Send
     + Sync
     + Debug
@@ -907,146 +910,98 @@ impl<T: BeaconChainTypes> Future for AvailabilityPendingExecutedBlock<T> {
     }
 }
 
-pub trait AsSignedBlock<T: BeaconChainTypes> {
-    fn block_root(&self) -> Hash256;
-    fn slot(&self) -> Slot;
-    fn epoch(&self) -> Epoch;
-    fn parent_root(&self) -> Hash256;
-    fn state_root(&self) -> Hash256;
-    fn signed_block_header(&self) -> SignedBeaconBlockHeader;
-    fn message(&self) -> BeaconBlockRef<<T as BeaconChainTypes>::EthSpec>;
-    fn as_block(&self) -> &SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>;
-    fn block_cloned(&self) -> Arc<SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>>;
-}
-
 /// Nested types must also implement the implemented trait.
 pub mod expose_getters {
-    #[macro_export]
+    #[macro_export(local_inner_macros)]
+    macro_rules! impl_fns {
+        ($impl_trait: path, $nested_type_one: ty, $nested_type_two: ty, $nested_type_three: ty,, $enum_variant_one: path, $enum_variant_two: path, $enum_variant_three: path, $(.$fields: tt)*, ($fn_name: ident, $return_type: ty),) => {
+            fn $fn_name(&self) -> $return_type {
+                match self$(.$fields)* {
+                    $enum_variant_one(ref nested, ..) => <$nested_type_one as $impl_trait>::$fn_name(nested),
+                    $enum_variant_two(ref nested, ..) => <$nested_type_two as $impl_trait>::$fn_name(nested),
+                    $enum_variant_three(ref nested, ..) => <$nested_type_three as $impl_trait>::$fn_name(nested),
+                }
+            }
+        };
+        ($impl_trait: path, $nested_type_one: ty, $nested_type_two: ty, $nested_type_three: ty,, $enum_variant_one: path, $enum_variant_two: path, $enum_variant_three: path, $(.$fields: tt)*, ($fn_name: ident, $return_type: ty), $(($fn_names: ident, $return_types: ty),)+) => {
+            fn $fn_name(&self) -> $return_type {
+                match self$(.$fields)* {
+                    $enum_variant_one(ref nested, ..) => <$nested_type_one as $impl_trait>::$fn_name(nested),
+                    $enum_variant_two(ref nested, ..) => <$nested_type_two as $impl_trait>::$fn_name(nested),
+                    $enum_variant_three(ref nested, ..) => <$nested_type_three as $impl_trait>::$fn_name(nested),
+                }
+            }
+        };
+        ($impl_trait: path, $nested_type_one: ty, $nested_type_two: ty,, $enum_variant_one: path, $enum_variant_two: path, $(.$fields: tt)*, ($fn_name: ident, $return_type: ty),) => {
+            fn $fn_name(&self) -> $return_type {
+                match self$(.$fields)* {
+                    $enum_variant_one(ref nested, ..) => <$nested_type_one as $impl_trait>::$fn_name(nested),
+                    $enum_variant_two(ref nested, ..) => <$nested_type_two as $impl_trait>::$fn_name(nested),
+                }
+            }
+        };
+        ($impl_trait: path, $nested_type_one: ty, $nested_type_two: ty,, $enum_variant_one: path, $enum_variant_two: path, $(.$fields: tt)*, ($fn_name: ident, $return_type: ty), $(($fn_names: ident, $return_types: ty),)+) => {
+            fn $fn_name(&self) -> $return_type {
+                match self$(.$fields)* {
+                    $enum_variant_one(ref nested, ..) => <$nested_type_one as $impl_trait>::$fn_name(nested),
+                    $enum_variant_two(ref nested, ..) => <$nested_type_two as $impl_trait>::$fn_name(nested),
+                }
+            }
+        };
+    }
+    #[macro_export(local_inner_macros)]
     macro_rules! impl_expose_getters {
-        ($impl_trait: path, $nested_type: ty, $fn_name: ident, $return_type: ty, $(.$field: tt)*, ($fn_name: ident, $return_type: ty),) => {
+        (@fns $impl_trait: path, $nested_type: ty, $(.$fields: tt)*, ($fn_name: ident, $return_type: ty),) => {
             fn $fn_name(&self) -> $return_type {
-                <$nested_type as $impl_trait>::$fn_name(&self$(.$field)*)
+                <$nested_type as $impl_trait>::$fn_name(&self$(.$fields)*)
             }
         };
-        ($impl_trait: path, $nested_type: ty, $fn_name: ident, $return_type: ty, $(.$field: tt)*, ($fn_name: ident, $return_type: ty), $(($fn_names: ident, $return_types: ty),)+) => {
+        (@fns $impl_trait: path, $nested_type: ty, $(.$fields: tt)*, ($fn_name: ident, $return_type: ty), $(($fn_names: ident, $return_types: ty),)+) => {
             fn $fn_name(&self) -> $return_type {
-                <$nested_type as $impl_trait>::$fn_name(&self$(.$field)*)
+                <$nested_type as $impl_trait>::$fn_name(&self$(.$fields)*)
             }
-            impl_expose_getters!($impl_trait, $nested_type, $fn_name, $return_type, $(.$field)*, $(($fn_names, $return_types),)+);
+            impl_expose_getters!(@fns $impl_trait, $nested_type, $(.$fields)*, $(($fn_names, $return_types),)+);
         };
-        ($(<$($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)+>)*, $impl_trait: path, $type: ty, $nested_type: ty, $fn_name: ident, $return_type: ty, $(.$field: tt)*, $(($fn_names: ident, $return_types: ty),)+) => {
+        ($(<$($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*,)+>)*, $impl_trait: path, $type: ty, $nested_type: ty, $(.$fields: tt)*, $(($fn_names: ident, $return_types: ty),)+) => {
             impl$(<$($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*,)+>)* $impl_trait for $type {
-                impl_expose_getters!($impl_trait, $nested_type, $(.$field)*, $(($fn_names, $return_types))+);
+                impl_expose_getters!(@fns $impl_trait, $nested_type, $(.$fields)*, $(($fn_names, $return_types),)+);
             }
         };
 
-        ($impl_trait: path, $nested_type: ty, $fn_name: ident, $enum_variant: path,) => {
-            $enum_variant(ref nested, ..) => <$nested_type as $impl_trait>::$fn_name(nested),
-        };
-        ($impl_trait: path, $nested_type: ty, $fn_name: ident, $enum_variant: path, $($enum_variants: path,)+) => {
-            $enum_variant(ref nested, ..) => <$nested_type as $impl_trait>::$fn_name(nested),
-            impl_expose_getters!($impl_trait, $nested_type, $fn_name, $($enum_variants,)+);
-        };
-        ($impl_trait: path, $nested_type: ty, $($enum_variants: path,)+ $(.$field: tt)*, ($fn_name: ident, $return_type: ty),) => {
-            fn $fn_name(&self) -> $return_type {
-                match self$(.$field)* {
-                    impl_expose_getters!($impl_trait, $nested_type, $fn_name, $($enum_variants,)+);
-                }
-            }
-        };
-        ($impl_trait: path, $nested_type: ty, $($enum_variants: path,)+ $(.$field: tt)*, ($fn_name: ident, $return_type: ty), $(($fn_names: ident, $return_types: ty),)+) => {
-            fn $fn_name(&self) -> $return_type {
-                match self$(.$field)* {
-                    impl_expose_getters!($impl_trait, $nested_type, $fn_name, $($enum_variants,)+);
-                }
-            }
-            impl_expose_getters!($impl_trait, $nested_type, $($enum_variants,)+ $(.$field)*, $(($fn_names, $return_types),)+);
-        };
-        ($(<$($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)+>)*, $impl_trait: path, $type: ty, $nested_type: ty, $($enum_variants: path,)+, $(.$field: tt)*, $(($fn_names: ident, $return_types: ty),)+) => {
+        ($(<$($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*,)+>)*, $impl_trait: path, $type: ty, $($nested_types: ty,)+, $($enum_variants: path,)+, $(.$fields: tt)*, $(($fn_names: ident, $return_types: ty),)+) => {
             impl$(<$($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*,)+>)* $impl_trait for $type {
-                impl_expose_getters!($impl_trait, $nested_type, $($enum_variants,)+ $(.$field)*, $(($fn_names, $return_types),)+);
+                impl_fns!($impl_trait, $($nested_types,)+, $($enum_variants,)+ $(.$fields)*, $(($fn_names, $return_types),)+);
             }
         };
     }
 }
 
 mod as_signed_block {
-    #[macro_use]
-    use super::expose_getters;
-    use super::*;
-
-    #[macro_export]
+    #[macro_export(local_inner_macros)]
     macro_rules! impl_as_signed_block {
-        ($($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)*, $type: ty, $nested_type: ty, $(.$field: tt)*, $(($fn_names: ident, $return_types: ty),)+) => {
-            impl_expose_getters!(<T: BeaconChainTypes, $($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*)*>, AsSignedBlock<T>, $type, $nested_type, $(.$field)*, (block_root, Hash256), (slot, Slot), (epoch, Epoch), (parent_root, Hash256), (state_root, Hash256), (signed_block_header, Hash256), (message, BeaconBlockRef<<T as BeaconChainTypes>::EthSpec>), (as_block, &SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>), (block_cloned, Arc<SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>>),);
+        ($impl_trait_generic: path, $($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*,)+, $type: ty, $nested_type: ty, $(.$fields: tt)*) => {
+            impl_expose_getters!(<$($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*,)+>, AsSignedBlock<$impl_trait_generic>, $type, $nested_type, $(.$fields)*, (block_root, Hash256), (slot, Slot), (epoch, Epoch), (parent_root, Hash256), (state_root, Hash256), (signed_block_header, Hash256), (message, BeaconBlockRef<$impl_trait_generic>), (as_block, &SignedBeaconBlock<$impl_trait_generic>), (block_cloned, Arc<SignedBeaconBlock<$impl_trait_generic>>),);
         };
-        ($($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)*, $type: ty, $nested_type: ty, $($enum_variants: path,)+, $(.$field: tt)*, $(($fn_names: ident, $return_types: ty),)+) => {
-            impl_expose_getters!(<B: BeaconChainTypes, $($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*)*>, AsSignedBlock<T>, $type, $nested_type, $($enum_variants,)+, $(.$field)*, (block_root, Hash256), (slot, Slot), (epoch, Epoch), (parent_root, Hash256), (state_root, Hash256), (signed_block_header, Hash256), (message, BeaconBlockRef<<T as BeaconChainTypes>::EthSpec>), (as_block, &SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>), (block_cloned, Arc<SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>>),);
+        ($impl_trait_generic: path, $($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*,)+, $type: ty, $($nested_types: ty,)+ $(.$fields: tt)*, $($enum_variants: path,)+) => {
+            impl_expose_getters!(<$($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*,)+>, AsSignedBlock<$impl_trait_generic>, $type, $($nested_types,)+, $($enum_variants,)+, $(.$fields)*, (block_root, Hash256), (slot, Slot), (epoch, Epoch), (parent_root, Hash256), (state_root, Hash256), (signed_block_header, Hash256), (message, BeaconBlockRef<$impl_trait_generic>), (as_block, &SignedBeaconBlock<$impl_trait_generic>), (block_cloned, Arc<SignedBeaconBlock<$impl_trait_generic>>),);
         };
     }
 }
 
-impl_as_signed_block!(B: TryIntoAvailableBlock<T,>, ExecutedBlock<T, B>, B, .block);
-impl_as_signed_block!(, ExecutedBlockInError<T::EthSpec>, Arc<SignedBeaconBlock<T::EthSpec>>, .block);
-
-pub trait AsSignedBlobSidecar<E: EthSpec> {
-    fn beacon_block_root(&self) -> Hash256;
-    fn beacon_block_slot(&self) -> Slot;
-    fn proposer_index(&self) -> u64;
-    fn block_parent_root(&self) -> Hash256;
-    fn blob_index(&self) -> u64;
-    fn blob(&self) -> &Blob<E>;
-    fn kzg_aggregated_proof(&self) -> KzgProof;
-    // fn signed_block_header(&self) -> SignedBeaconBlockHeader;
-    fn as_blob(&self) -> &SignedBlobSidecar<E>;
-    fn blob_cloned(&self) -> Arc<SignedBlobSidecar<E>>;
-}
+impl_as_signed_block!(T::EthSpec, T: BeaconChainTypes, B: TryIntoAvailableBlock<T,>,, ExecutedBlock<T, B>, B, .block);
+impl_as_signed_block!(E, E: EthSpec,, ExecutedBlockInError<E>, Arc<SignedBeaconBlock<E>>, .block);
+impl_as_signed_block!(E, E: EthSpec,, AvailabilityPendingBlock<E>, Arc<SignedBeaconBlock<E>>, .block);
+impl_as_signed_block!(E, E: EthSpec,, AvailableBlock<E>, Arc<SignedBeaconBlock<E>>, Arc<SignedBeaconBlock<E>>, .0, AvailableBlockInner::Block, AvailableBlockInner::BlockAndBlobs,);
+impl_as_signed_block!(E, E: EthSpec,, SomeAvailabilityBlock<E>, AvailableBlock<E>, AvailabilityPendingBlock<E>, Arc<SignedBeaconBlock<E>>,, Self::Available, Self::AvailabilityPending, Self::RawBlock,);
 
 mod as_signed_blob_sidecar {
-    #[macro_use]
-    use super::expose_getters;
-    use super::*;
-
-    #[macro_export]
+    #[macro_export(local_inner_macros)]
     macro_rules! impl_as_signed_blob_sidecar {
-        ($($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)*, $type: ty, $nested_type: ty, $(.$field: tt)*) => {
-            impl_expose_getters!(<E: EthSpec, $($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*)*>, AsSignedBlobSidecar<E>, $type, $nested_type, $(.$field)*, (beacon_block_root, Hash256), (beacon_block_slot, Slot), (proposer_index, u64), (block_parent_root, Hash256), (blob_index, u64), (blob, &Blob<E>), (kzg_aggregated_proof, KzgProof), (message, &BlobSidecar<E>), (as_blob, &SignedBlobSidecar<E>), (blob_cloned, Arc<SignedBlobSidecar<E>>),);
+        ($($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)*, $type: ty, $nested_type: ty, $(.$fields: tt)*) => {
+            impl_expose_getters!(<E: EthSpec, $($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*)*>, AsSignedBlobSidecar<E>, $type, $nested_type, $(.$fields)*, (beacon_block_root, Hash256), (beacon_block_slot, Slot), (proposer_index, u64), (block_parent_root, Hash256), (blob_index, u64), (blob, &Blob<E>), (kzg_aggregated_proof, KzgProof), (as_blob, &SignedBlobSidecar<E>), (blob_cloned, Arc<SignedBlobSidecar<E>>),);
         };
-        ($($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)*, $type: ty, $nested_type: ty, $($enum_variants: path,)+, $(.$field: tt)*) => {
-            impl_expose_getters!(<E: EthSpec, $($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*)*>, AsSignedBlock<T>, $type, $nested_type, $($enum_variants,)+, $(.$field)*, (beacon_block_root, Hash256), (beacon_block_slot, Slot), (proposer_index, u64), (block_parent_root, Hash256), (blob_index, u64), (blob, &Blob<E>), (kzg_aggregated_proof, KzgProof), (message, &BlobSidecar<E>), (as_blob, &SignedBlobSidecar<E>), (blob_cloned, Arc<SignedBlobSidecar<E>>),);
+        ($($generic: ident: $trait: ident$(<$($generics: ident,)+>)*$(+ $traits: ident$(<$($generics_nested: ident,)+>)*)*)*, $type: ty, $nested_type: ty, $(.$fields: tt)*, $($enum_variants: path,)+) => {
+            impl_expose_getters!(<E: EthSpec, $($generic: $trait$(<$($generics,)+>)*$(+ $traits$(<$($generics_nested,)+>)*)*)*>, AsSignedBlock<T>, $type, $nested_type, $($enum_variants,)+, $(.$fields)*, (beacon_block_root, Hash256), (beacon_block_slot, Slot), (proposer_index, u64), (block_parent_root, Hash256), (blob_index, u64), (blob, &Blob<E>), (kzg_aggregated_proof, KzgProof), (as_blob, &SignedBlobSidecar<E>), (blob_cloned, Arc<SignedBlobSidecar<E>>),);
         };
     }
 }
-
-impl_as_signed_blob_sidecar!(, GossipVerifiedBlob, Arc<SignedBlobSidecar<E>>, .0);
-
-// todo(emhane): move to signed block
-/*impl_as_signed_block!(<T: BeaconChainTypes,>, AsSignedBlock<T>, Arc<SignedBeaconBlock<T::EthSpec>>, AvailabilityPendingBlock<T::EthSpec>, .block);*/
-/*impl_as_signed_block!(
-    <T: BeaconChainTypes,>, AsSignedBlock<T>,
-    &Arc<SignedBeaconBlock<T::EthSpec>>,
-    Arc<SignedBeaconBlock<T::EthSpec>>,
-);*/
-
-/*impl_as_signed_block!(, AvailableBlock<T::EthSpec>, Arc<SignedBeaconBlock<T::EthSpec>>, .0, AvailableBlockInner::Block, AvailableBlockInner::BlockAndBlobs);
-impl_as_signed_block!(, SomeAvailabilityBlock<T::EthSpec>, AvailableBlock<T::EthSpec>, AvailabilityPendingBlock<T::EthSpec>, Arc<SignedBeaconBlock<T::EthSpec>>,, Self::Available, Self::AvailabilityPending, Self::RawBlock);
-
-impl<T: BeaconChainTypes> AsSignedBlock<T> for Arc<SignedBeaconBlock<T::EthSpec>> {
-    impl_expose_getters!(Self, block_root, Hash256,);
-    impl_expose_getters!(Self, slot, Slot,);
-    impl_expose_getters!(Self, epoch, Epoch,);
-    impl_expose_getters!(Self, parent_root, Hash256,);
-    impl_expose_getters!(Self, state_root, Hash256,);
-    impl_expose_getters!(Self, signed_block_header, SignedBeaconBlockHeader,);
-    impl_expose_getters!(
-        Self,
-        message,
-        BeaconBlockRef<<T as BeaconChainTypes>::EthSpec>,
-    );
-    fn as_block(&self) -> &SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec> {
-        &*self
-    }
-    fn block_cloned(&self) -> Arc<SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>> {
-        self.clone()
-    }
-}*/

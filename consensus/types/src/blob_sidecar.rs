@@ -1,5 +1,3 @@
-use crate::beacon_chain::blob_verification::AsSignedBlobSidecar;
-use crate::impl_as_signed_blob_sidecar;
 use crate::test_utils::TestRandom;
 use crate::{BeaconBlockHeader, Blob, EthSpec, Hash256, SignedBeaconBlockHeader, SignedRoot, Slot};
 use bls::Signature;
@@ -8,6 +6,7 @@ use kzg::KzgProof;
 use serde_derive::{Deserialize, Serialize};
 use ssz::Encode;
 use ssz_derive::{Decode, Encode};
+use std::{fmt::Debug, sync::Arc};
 use test_random_derive::TestRandom;
 use tree_hash_derive::TreeHash;
 
@@ -91,16 +90,40 @@ impl<T: EthSpec> SignedBlobSidecar<T> {
     }
 }
 
-impl<T: EthSpec> AsSignedBlobSidecar<T> for SignedBlobSidecar<T> {
-    #[allow(clippy::integer_arithmetic)]
-    impl_as_signed_blob_sidecar!(beacon_block_root, Hash256);
-    impl_as_signed_blob_sidecar!(beacon_block_slot, Slot);
-    impl_as_signed_blob_sidecar!(proposer_index, u64);
-    impl_as_signed_blob_sidecar!(block_parent_root, Hash256);
-    impl_as_signed_blob_sidecar!(blob_index, u64);
-    impl_as_signed_blob_sidecar!(kzg_aggregated_proof, KzgProof);
-    fn message(&self) -> &BlobSidecar<T> {
-        &self.message
+pub trait AsSignedBlobSidecar<E: EthSpec>: Debug {
+    fn beacon_block_root(&self) -> Hash256;
+    fn beacon_block_slot(&self) -> Slot;
+    fn proposer_index(&self) -> u64;
+    fn block_parent_root(&self) -> Hash256;
+    fn blob_index(&self) -> u64;
+    fn blob(&self) -> &Blob<E>;
+    fn kzg_aggregated_proof(&self) -> KzgProof;
+    // fn signed_block_header(&self) -> SignedBeaconBlockHeader;
+    fn as_blob(&self) -> &SignedBlobSidecar<E>;
+    fn blob_cloned(&self) -> Arc<SignedBlobSidecar<E>>;
+}
+
+impl<T: EthSpec> AsSignedBlobSidecar<T> for Arc<SignedBlobSidecar<T>> {
+    fn beacon_block_root(&self) -> Hash256 {
+        self.message.beacon_block_root
+    }
+    fn beacon_block_slot(&self) -> Slot {
+        self.message.beacon_block_slot
+    }
+    fn proposer_index(&self) -> u64 {
+        self.message.proposer_index
+    }
+    fn block_parent_root(&self) -> Hash256 {
+        self.message.block_parent_root
+    }
+    fn blob_index(&self) -> u64 {
+        self.message.blob_index
+    }
+    fn blob(&self) -> &Blob<T> {
+        &self.message.blob
+    }
+    fn kzg_aggregated_proof(&self) -> KzgProof {
+        self.message.kzg_aggregated_proof
     }
     // todo(emhane)
     /*/// Produce a signed beacon block header corresponding to this blob.
@@ -110,8 +133,10 @@ impl<T: EthSpec> AsSignedBlobSidecar<T> for SignedBlobSidecar<T> {
             signature: self.signature.clone(),
         }
     }*/
-    fn as_blob(&self) -> &Blob<T> {
-        &self.message().blob
+    fn as_blob(&self) -> &SignedBlobSidecar<T> {
+        &*self
     }
-    fn blob_cloned(&self) -> Arc<SignedBlobSidecar<T>> {}
+    fn blob_cloned(&self) -> Arc<SignedBlobSidecar<T>> {
+        self.clone()
+    }
 }

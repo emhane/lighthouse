@@ -8,8 +8,8 @@ use crate::beacon_proposer_cache::compute_proposer_duties_from_head;
 use crate::beacon_proposer_cache::BeaconProposerCache;
 use crate::blob_cache::BlobCache;
 use crate::blob_verification::{
-    AsSignedBlock, AvailabilityPendingBlock, AvailabilityPendingExecutedBlock, AvailableBlock,
-    BlobError, DataAvailabilityFailure, ExecutedBlock, IntoWrappedAvailabilityPendingBlock,
+    AvailabilityPendingBlock, AvailabilityPendingExecutedBlock, AvailableBlock, BlobError,
+    DataAvailabilityFailure, ExecutedBlock, IntoWrappedAvailabilityPendingBlock,
     TryIntoAvailableBlock,
 };
 use crate::block_times_cache::BlockTimesCache;
@@ -104,6 +104,7 @@ use state_processing::{
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::io::prelude::*;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -277,7 +278,7 @@ pub enum StateSkipConfig {
     WithoutStateRoots,
 }
 
-pub trait BeaconChainTypes: Send + Sync + 'static {
+pub trait BeaconChainTypes: Send + Sync + Debug + 'static {
     type HotStore: store::ItemStore<Self::EthSpec>;
     type ColdStore: store::ItemStore<Self::EthSpec>;
     type SlotClock: slot_clock::SlotClock;
@@ -2984,7 +2985,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // -----------------------------------------------------------------------------------------
         let current_slot = self.slot()?;
         let current_epoch = current_slot.epoch(T::EthSpec::slots_per_epoch());
-        let block = <AvailableBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::message(
+        let block = <AvailableBlock<T> as AsSignedBlock<T>>::message(
             &signed_block,
         );
         let post_exec_timer = metrics::start_timer(&metrics::BLOCK_PROCESSING_POST_EXEC_PROCESSING);

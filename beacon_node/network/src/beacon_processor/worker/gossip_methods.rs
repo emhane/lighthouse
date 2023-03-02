@@ -673,6 +673,7 @@ impl<T: BeaconChainTypes> Worker<T> {
             Some((_, Some(_))) | None => None,
         };
         drop(channels);
+
         let tx = match sender_to_block {
             Some(tx) => tx,
             None => {

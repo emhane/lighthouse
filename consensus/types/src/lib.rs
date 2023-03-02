@@ -121,7 +121,7 @@ pub use crate::beacon_block_body::{
 pub use crate::beacon_block_header::BeaconBlockHeader;
 pub use crate::beacon_committee::{BeaconCommittee, OwnedBeaconCommittee};
 pub use crate::beacon_state::{BeaconTreeHashCache, Error as BeaconStateError, *};
-pub use crate::blob_sidecar::{BlobSidecar, SignedBlobSidecar};
+pub use crate::blob_sidecar::{AsSignedBlobSidecar, BlobSidecar, SignedBlobSidecar};
 pub use crate::blobs_sidecar::BlobsSidecar;
 pub use crate::bls_to_execution_change::BlsToExecutionChange;
 pub use crate::chain_spec::{ChainSpec, Config, Domain};
@@ -173,9 +173,9 @@ pub use crate::selection_proof::SelectionProof;
 pub use crate::shuffling_id::AttestationShufflingId;
 pub use crate::signed_aggregate_and_proof::SignedAggregateAndProof;
 pub use crate::signed_beacon_block::{
-    SignedBeaconBlock, SignedBeaconBlockAltair, SignedBeaconBlockBase, SignedBeaconBlockCapella,
-    SignedBeaconBlockEip4844, SignedBeaconBlockHash, SignedBeaconBlockMerge,
-    SignedBlindedBeaconBlock,
+    AsSignedBlock, SignedBeaconBlock, SignedBeaconBlockAltair, SignedBeaconBlockBase,
+    SignedBeaconBlockCapella, SignedBeaconBlockEip4844, SignedBeaconBlockHash,
+    SignedBeaconBlockMerge, SignedBlindedBeaconBlock,
 };
 pub use crate::signed_beacon_block_header::SignedBeaconBlockHeader;
 pub use crate::signed_block_and_blobs::SignedBeaconBlockAndBlobsSidecar;
