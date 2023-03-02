@@ -676,7 +676,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         let tx = match sender_to_block {
             Some(tx) => tx,
             None => {
-                let channels = self.chain.pending_blocks_tx_rx.read();
+                let channels = self.chain.pending_blocks_tx_rx.write();
                 let tx = match channels.entry(block_root) {
                     Entry::Occupied(mut e) => {
                         match *e.get_mut() {
