@@ -84,6 +84,7 @@ use state_processing::{
     VerifyBlockRoot,
 };
 use std::borrow::Cow;
+use std::fmt::Debug;
 use std::fs;
 use std::io::Write;
 use std::sync::Arc;
@@ -419,20 +420,16 @@ impl<T: EthSpec> From<InconsistentFork> for BlockError<T> {
     }
 }
 
-// todo(emhane)
-/*impl<T: EthSpec> std::fmt::Display for BlockError<T> {
+impl<T: EthSpec> std::fmt::Display for BlockError<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockError::ParentUnknown(block.into()) => {
-                write!(f, "ParentUnknown(parent_root:{})", <AvailableBlock<T> as AsSignedBlock<T>>::parent_root(&block))
-            }
-            BlockError::ParentUnknownAndAvailabilityUnknown(block) => {
-                write!(f, "ParentUnknown(parent_root:{})", <AvailabilityPendingBlock<T> as AsSignedBlock<T>>::parent_root(&block))
+            BlockError::ParentUnknown(block) => {
+                write!(f, "ParentUnknown(parent_root:{})", block.parent_root())
             }
             other => write!(f, "{:?}", other),
         }
     }
-}*/
+}
 
 impl<T: EthSpec> From<BlockSignatureVerifierError> for BlockError<T> {
     fn from(e: BlockSignatureVerifierError) -> Self {
@@ -689,6 +686,7 @@ impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
 
 /// A wrapper around a `SignedBeaconBlock` that indicates that all signatures (except the deposit
 /// signatures) have been verified.
+#[derive(Debug)]
 pub struct SignatureVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>> {
     block: B,
     block_root: Hash256,
@@ -1306,8 +1304,8 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T, Arc<SignedBeaconBlock<T::
         BlockSlashInfo<BlockError<T::EthSpec>>,
     > {
         // Perform an early check to prevent wasting time on irrelevant blocks.
-        let block_root = check_block_relevancy(<Arc<types::SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>> as AsSignedBlock<T>>::as_block(&self), block_root, chain)
-            .map_err(|e| BlockSlashInfo::SignatureNotChecked(<Arc<types::SignedBeaconBlock<<T as BeaconChainTypes>::EthSpec>> as AsSignedBlock<T>>::signed_block_header(&self), e))?;
+        let block_root = check_block_relevancy(self.as_block(), block_root, chain)
+            .map_err(|e| BlockSlashInfo::SignatureNotChecked(self.signed_block_header(), e))?;
 
         SignatureVerifiedBlock::check_slashable(self, block_root, chain)?
             .into_execution_pending_block_slashable(block_root, chain, notify_execution_layer)
@@ -1333,17 +1331,15 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T, AvailabilityPendingBlock<
         BlockSlashInfo<BlockError<T::EthSpec>>,
     > {
         // Perform an early check to prevent wasting time on irrelevant blocks.
-        let block_root = check_block_relevancy(<AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::as_block(&self), block_root, chain)
-            .map_err(|e| BlockSlashInfo::SignatureNotChecked(<AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::signed_block_header(&self), e))?;
+        let block_root = check_block_relevancy(self.as_block(), block_root, chain)
+            .map_err(|e| BlockSlashInfo::SignatureNotChecked(self.signed_block_header(), e))?;
 
         SignatureVerifiedBlock::check_slashable(self, block_root, chain)?
             .into_execution_pending_block_slashable(block_root, chain, notify_execution_layer)
     }
 
     fn block(&self) -> &SignedBeaconBlock<T::EthSpec> {
-        <AvailabilityPendingBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::as_block(
-            self,
-        )
+        self.as_block()
     }
 }
 
@@ -1362,15 +1358,15 @@ impl<T: BeaconChainTypes> IntoExecutionPendingBlock<T, AvailableBlock<T::EthSpec
         BlockSlashInfo<BlockError<T::EthSpec>>,
     > {
         // Perform an early check to prevent wasting time on irrelevant blocks.
-        let block_root = check_block_relevancy(<AvailableBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::as_block(&self), block_root, chain)
-            .map_err(|e| BlockSlashInfo::SignatureNotChecked(<AvailableBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::signed_block_header(&self), e))?;
+        let block_root = check_block_relevancy(self.as_block(), block_root, chain)
+            .map_err(|e| BlockSlashInfo::SignatureNotChecked(self.signed_block_header(), e))?;
 
         SignatureVerifiedBlock::check_slashable(self, block_root, chain)?
             .into_execution_pending_block_slashable(block_root, chain, notify_execution_layer)
     }
 
     fn block(&self) -> &SignedBeaconBlock<T::EthSpec> {
-        <AvailableBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::as_block(self)
+        self.as_block()
     }
 }
 

@@ -355,7 +355,7 @@ impl<T: BeaconChainTypes> ReprocessQueue<T> {
             // Some block has been indicated as "early" and should be processed when the
             // appropriate slot arrives.
             InboundEvent::Msg(EarlyBlock(early_block)) => {
-                let block_slot = <SomeAvailabilityBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::slot(&early_block.block.block);
+                let block_slot = early_block.block.block.slot();
                 let block_root = early_block.block.block_root;
 
                 // Don't add the same block to the queue twice. This prevents DoS attacks.

@@ -90,7 +90,7 @@ impl<T: EthSpec> SignedBlobSidecar<T> {
     }
 }
 
-pub trait AsSignedBlobSidecar<E: EthSpec>: Debug {
+pub trait AsSignedBlobSidecar<E: EthSpec> {
     fn beacon_block_root(&self) -> Hash256;
     fn beacon_block_slot(&self) -> Slot;
     fn proposer_index(&self) -> u64;

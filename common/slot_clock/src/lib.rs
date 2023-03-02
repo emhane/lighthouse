@@ -5,12 +5,12 @@ mod manual_slot_clock;
 mod metrics;
 mod system_time_slot_clock;
 
-use std::time::Duration;
-
 pub use crate::manual_slot_clock::ManualSlotClock;
 pub use crate::manual_slot_clock::ManualSlotClock as TestingSlotClock;
 pub use crate::system_time_slot_clock::SystemTimeSlotClock;
 pub use metrics::scrape_for_metrics;
+use std::fmt::Debug;
+use std::time::Duration;
 use types::consts::merge::INTERVALS_PER_SLOT;
 pub use types::Slot;
 

@@ -527,19 +527,7 @@ impl<E: EthSpec> SignedBeaconBlock<E> {
     }
 }
 
-pub trait AsSignedBlock<T: EthSpec>: Debug {
-    fn block_root(&self) -> Hash256;
-    fn slot(&self) -> Slot;
-    fn epoch(&self) -> Epoch;
-    fn parent_root(&self) -> Hash256;
-    fn state_root(&self) -> Hash256;
-    fn signed_block_header(&self) -> SignedBeaconBlockHeader;
-    fn message(&self) -> BeaconBlockRef<T>;
-    fn as_block(&self) -> &SignedBeaconBlock<T>;
-    fn block_cloned(&self) -> Arc<SignedBeaconBlock<T>>;
-}
-
-impl<T: EthSpec> AsSignedBlock<T> for Arc<SignedBeaconBlock<T>> {
+pub trait AsSignedBlock<T: EthSpec> {
     fn block_root(&self) -> Hash256 {
         self.block_root()
     }
@@ -561,11 +549,25 @@ impl<T: EthSpec> AsSignedBlock<T> for Arc<SignedBeaconBlock<T>> {
     fn message(&self) -> BeaconBlockRef<T> {
         self.message()
     }
+    fn as_block(&self) -> &SignedBeaconBlock<T>;
+    fn block_cloned(&self) -> Arc<SignedBeaconBlock<T>>;
+}
+
+impl<T: EthSpec> AsSignedBlock<T> for Arc<SignedBeaconBlock<T>> {
     fn as_block(&self) -> &SignedBeaconBlock<T> {
         &*self
     }
     fn block_cloned(&self) -> Arc<SignedBeaconBlock<T>> {
         self.clone()
+    }
+}
+
+impl<T: EthSpec> AsSignedBlock<T> for &Arc<SignedBeaconBlock<T>> {
+    fn as_block(&self) -> &SignedBeaconBlock<T> {
+        &*self
+    }
+    fn block_cloned(&self) -> Arc<SignedBeaconBlock<T>> {
+        (*self).clone()
     }
 }
 

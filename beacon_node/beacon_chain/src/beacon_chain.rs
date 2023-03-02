@@ -278,7 +278,7 @@ pub enum StateSkipConfig {
     WithoutStateRoots,
 }
 
-pub trait BeaconChainTypes: Send + Sync + Debug + 'static {
+pub trait BeaconChainTypes: Send + Sync + 'static {
     type HotStore: store::ItemStore<Self::EthSpec>;
     type ColdStore: store::ItemStore<Self::EthSpec>;
     type SlotClock: slot_clock::SlotClock;
@@ -2985,9 +2985,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
         // -----------------------------------------------------------------------------------------
         let current_slot = self.slot()?;
         let current_epoch = current_slot.epoch(T::EthSpec::slots_per_epoch());
-        let block = <AvailableBlock<T> as AsSignedBlock<T>>::message(
-            &signed_block,
-        );
+        let block = signed_block.message();
         let post_exec_timer = metrics::start_timer(&metrics::BLOCK_PROCESSING_POST_EXEC_PROCESSING);
 
         // Check against weak subjectivity checkpoint.
@@ -3025,9 +3023,7 @@ impl<T: BeaconChainTypes> BeaconChain<T> {
 
         // Do not import a block that doesn't descend from the finalized root.
         let signed_block = check_block_is_finalized_descendant(self, &fork_choice, signed_block)?;
-        let block = <AvailableBlock<<T as BeaconChainTypes>::EthSpec> as AsSignedBlock<T>>::message(
-            &signed_block,
-        );
+        let block = signed_block.message();
 
         // Register the new block with the fork choice service.
         {

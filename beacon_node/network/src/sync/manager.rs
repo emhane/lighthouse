@@ -570,11 +570,7 @@ impl<T: BeaconChainTypes> SyncManager<T> {
                 // If we are not synced or within SLOT_IMPORT_TOLERANCE of the block, ignore
                 if !self.network_globals.sync_state.read().is_synced() {
                     let head_slot = self.chain.canonical_head.cached_head().head_slot();
-                    let unknown_block_slot = <SomeAvailabilityBlock<
-                        <T as BeaconChainTypes>::EthSpec,
-                    > as AsSignedBlock<T>>::slot(
-                        &block
-                    );
+                    let unknown_block_slot = block.slot();
 
                     // if the block is far in the future, ignore it. If its within the slot tolerance of
                     // our current head, regardless of the syncing state, fetch it.
