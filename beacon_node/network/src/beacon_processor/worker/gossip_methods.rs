@@ -664,60 +664,75 @@ impl<T: BeaconChainTypes> Worker<T> {
         // todo(emhane): verify signature
         let block_root = blob.beacon_block_root();
 
-        let channels = self.chain.pending_blocks_tx_rx.write();
-        let tx = match channels.entry(block_root) {
-            Entry::Occupied(mut e) => {
-                match *e.get_mut() {
-                    // A fallback solution to filtering, if the block didn't come yet to pick up
-                    // its receiver, borrow it and do the index filtering here, while locking the
-                    // `pending_blocks_tx_rx` to make sure no other blob workers do the same. if
-                    // the block comes before all its blobs, this will not have to be done.
-                    (tx, Some(rx)) => {
-                        let mut seen_blobs = Vec::with_capacity(T::EthSpec::max_blobs_per_block());
-                        loop {
-                            match rx.try_next() {
-                                Ok(Some((blob, _))) => {
-                                    seen_blobs.push(blob);
-                                }
-                                Ok(None) => {
-                                    // index filtering
-                                    if let Some(duplicate_blob) =
-                                        seen_blobs.iter().find(|existing_blob| {
-                                            existing_blob.blob_index() == blob.blob_index()
-                                        })
-                                    {
-                                        // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+        let channels = self.chain.pending_blocks_tx_rx.read();
+        let sender_to_block = match channels.get(&block_root) {
+            // the receiver has already been picked up by the block
+            Some((tx, None)) => Some(tx.clone()),
+            // read lock won't be enough if the receiver hasn't been picked up by a block or
+            // channel hasn't yet been initialized
+            Some((_, Some(_))) | None => None,
+        };
+        drop(channels);
+        let tx = match sender_to_block {
+            Some(tx) => tx,
+            None => {
+                let channels = self.chain.pending_blocks_tx_rx.read();
+                let tx = match channels.entry(block_root) {
+                    Entry::Occupied(mut e) => {
+                        match *e.get_mut() {
+                            // A fallback solution to filtering, if the block didn't come yet to pick up
+                            // its receiver, borrow it and do the index filtering here, while locking the
+                            // `pending_blocks_tx_rx` to make sure no other blob workers do the same. if
+                            // the block comes before all its blobs, this will not have to be done.
+                            (tx, Some(rx)) => {
+                                let mut seen_blobs =
+                                    Vec::with_capacity(T::EthSpec::max_blobs_per_block());
+                                loop {
+                                    match rx.try_next() {
+                                        Ok(Some((blob, _))) => {
+                                            seen_blobs.push(blob);
+                                        }
+                                        Ok(None) => {
+                                            // index filtering
+                                            if let Some(duplicate_blob) =
+                                                seen_blobs.iter().find(|existing_blob| {
+                                                    existing_blob.blob_index() == blob.blob_index()
+                                                })
+                                            {
+                                                // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+                                            }
+                                            // and put the blobs back when done
+                                            for blob in seen_blobs {
+                                                tx.send((blob, None));
+                                            }
+                                            return Ok(());
+                                        }
+                                        Err(e) => return Err(e),
                                     }
-                                    // and put the blobs back when done
-                                    for blob in seen_blobs {
-                                        tx.send((blob, None));
-                                    }
-                                    return Ok(());
                                 }
-                                Err(e) => return Err(e),
                             }
+                            // the receiver has already been picked up by the block
+                            (tx, None) => tx.clone(),
                         }
                     }
-                    // the receiver has already been picked up by the block
-                    (tx, None) => tx.clone(),
-                }
-            }
-            Entry::Vacant(e) => {
-                let (tx, rx) = futuresmpsc::channel::<(
-                    Arc<SignedBlobSidecar<T::EthSpec>>,
-                    Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
-                )>(T::EthSpec::max_blobs_per_block());
-                channels.insert(block_root, (tx.clone(), Some(rx)));
+                    Entry::Vacant(e) => {
+                        let (tx, rx) = futuresmpsc::channel::<(
+                            Arc<SignedBlobSidecar<T::EthSpec>>,
+                            Option<oneshot::Sender<Result<(), BlobError<T::EthSpec>>>>,
+                        )>(T::EthSpec::max_blobs_per_block());
+                        channels.insert(block_root, (tx.clone(), Some(rx)));
+                        tx
+                    }
+                };
+                drop(channels);
                 tx
             }
         };
-        drop(channels);
         // the block has picked up the blob receiver, let it do the index filtering and wait for
         // success notification
         let (tx_notify, rx_notify) = oneshot::channel::<Result<(), BlobError>>();
         tx.try_send((blob, Some(tx_notify)))?;
         match rx_notify.await? {
-            // todo(emhane): await to give index filtering time
             Some(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
                 // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
                 Ok(())
