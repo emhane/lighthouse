@@ -23,7 +23,9 @@ use state_processing::{
     ConsensusContext,
 };
 use std::{
+    cmp::PartialEq,
     fmt::Debug,
+    hash::{Hash, Hasher},
     marker::Sized,
     pin::Pin,
     sync::Arc,
@@ -105,7 +107,12 @@ pub enum BlobError<T: EthSpec> {
     /// Receiving a blob failed.
     RecvBlob(TryRecvError),
     /// Sending a blob failed.
-    SendBlob(TrySendError<Arc<SignedBlobSidecar<T>>>),
+    SendBlob(
+        TrySendError<(
+            Arc<SignedBlobSidecar<T>>,
+            Option<oneshot::Sender<Result<(), BlobError<T>>>>,
+        )>,
+    ),
     /// An [`AvailabilityPendingBlock`] already exists for this block.
     Duplicate,
 }
@@ -144,7 +151,7 @@ impl_from!(<T: EthSpec,>, BeaconChainError, BlobError<T>, Self::BeaconChainError
 impl_from!(<T: EthSpec,>, Arc<SignedBlobSidecar<T>>, BlobError<T>, Self::BlobAlreadyExistsAtIndex);
 impl_from!(<T: EthSpec,>, Canceled, BlobError<T>, Self::RecvOneshot);
 impl_from!(<T: EthSpec,>, TryRecvError, BlobError<T>, Self::RecvBlob);
-impl_from!(<T: EthSpec,>, TrySendError<Arc<SignedBlobSidecar<T>>>, BlobError<T>, Self::SendBlob);
+impl_from!(<T: EthSpec,>, TrySendError<(Arc<SignedBlobSidecar<T>>, Option<oneshot::Sender<Result<(), BlobError<T>>>>)>, BlobError<T>, Self::SendBlob);
 
 impl<T: EthSpec> From<BlobReconstructionError> for BlobError<T> {
     fn from(e: BlobReconstructionError) -> Self {
@@ -290,13 +297,33 @@ pub trait IntoWrappedAvailabilityPendingBlock<T: BeaconChainTypes>:
     ) -> Result<Self::Block, DataAvailabilityFailure<T::EthSpec>>;
 }
 
+/// A block that is actively waiting on its blobs to arrive over the network and on kzg-verifying
+/// them.
 #[derive(Debug)]
 pub struct AvailabilityPendingBlock<E: EthSpec> {
     block: Arc<SignedBeaconBlock<E>>,
     data_availability_handle: DataAvailabilityHandle<E>,
 }
 
-/// Used to await blobs from the network.
+impl<E: EthSpec> Hash for AvailabilityPendingBlock<E> {
+    // `into_availability_pending_block` returns `BlobError::Duplicate` to ensure a block doesn't
+    // wait for blobs arriving at more than one place. So, it is safe to say an
+    // AvailabilityPendingBlock is unique based on the block it wraps.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.block.hash(state);
+    }
+}
+
+impl<E: EthSpec> PartialEq for AvailabilityPendingBlock<E> {
+    // `into_availability_pending_block` returns `BlobError::Duplicate` to ensure a block doesn't
+    // wait for blobs arriving at more than one place. So, it is safe to say an
+    // AvailabilityPendingBlock is unique based on the block it wraps.
+    fn eq(&self, other: &Self) -> bool {
+        self.block == other.block
+    }
+}
+
+/// Used to await blobs from the network and kzg-verify them.
 type DataAvailabilityHandle<E> =
     JoinHandle<Option<Result<AvailableBlock<E>, DataAvailabilityFailure<E>>>>;
 
@@ -415,7 +442,7 @@ impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<
                     let mut channels = chain_cloned.pending_blocks_tx_rx.write();
                     let block_root =
                         match block {
-                            Some(ref block) => self.block_root(),
+                            Some(ref block) => block.block_root(),
                             None => match blobs.get(0) {
                                 Some(blob) => blob.beacon_block_root(),
                                 None => {
@@ -497,13 +524,15 @@ impl<T: BeaconChainTypes> TryIntoAvailableBlock<T> for AvailabilityPendingBlock<
 
 // todo(emhane): why is load_parent check done before block is verified as ready for import to
 // fork choice?
-#[derive(Debug)]
+/// An enum to wrap 3 states of a block in block processing for where generics cannot be
+/// used.
+#[derive(Debug, Derivative)]
+#[derivative(PartialEq, Hash(bound = "T: EthSpec"))]
 pub enum SomeAvailabilityBlock<T: EthSpec> {
     Available(AvailableBlock<T>),
     AvailabilityPending(AvailabilityPendingBlock<T>),
     RawBlock(Arc<SignedBeaconBlock<T>>),
 }
-
 impl_from!(<T: EthSpec,>, AvailableBlock<T>, SomeAvailabilityBlock<T>, Self::Available);
 impl_from!(<T: EthSpec,>, AvailabilityPendingBlock<T>, SomeAvailabilityBlock<T>, Self::AvailabilityPending);
 impl_from!(<T: EthSpec,>, Arc<SignedBeaconBlock<T>>, SomeAvailabilityBlock<T>, Self::RawBlock);
@@ -560,6 +589,8 @@ pub trait TryIntoAvailableBlock<T: BeaconChainTypes>:
     + Send
     + Sync
     + Into<SomeAvailabilityBlock<T::EthSpec>>
+    + Debug
+    + Hash
 {
     /// Use with caution. Block in [`BlobError::PendingAvailability`] error
     /// variant must be used since arriving blobs will use its channel. Consumes self and returns

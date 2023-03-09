@@ -1,7 +1,7 @@
 use crate::{metrics, service::NetworkMessage, sync::SyncMessage};
 
 use beacon_chain::blob_verification::{
-    AsSignedBlock, BlobError, GossipVerifiedBlob, TryIntoAvailableBlock,
+    BlobError, GossipVerifiedBlob, SomeAvailabilityBlock, TryIntoAvailableBlock,
 };
 use beacon_chain::store::Error;
 use beacon_chain::{
@@ -26,10 +26,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use store::hot_cold_store::HotColdDBError;
 use tokio::sync::mpsc;
 use types::{
-    Attestation, AttesterSlashing, EthSpec, Hash256, IndexedAttestation, LightClientFinalityUpdate,
-    LightClientOptimisticUpdate, ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock,
-    SignedBlobSidecar, SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit,
-    Slot, SubnetId, SyncCommitteeMessage, SyncSubnetId,
+    AsSignedBlobSidecar, AsSignedBlock, Attestation, AttesterSlashing, EthSpec, Hash256,
+    IndexedAttestation, LightClientFinalityUpdate, LightClientOptimisticUpdate, ProposerSlashing,
+    SignedAggregateAndProof, SignedBeaconBlock, SignedBlobSidecar, SignedBlsToExecutionChange,
+    SignedContributionAndProof, SignedVoluntaryExit, Slot, SubnetId, SyncCommitteeMessage,
+    SyncSubnetId,
 };
 
 use super::{
@@ -731,14 +732,11 @@ impl<T: BeaconChainTypes> Worker<T> {
         };
         // the block has picked up the blob receiver, let it do the index filtering and wait for
         // success notification
-        let (tx_notify, rx_notify) = oneshot::channel::<Result<(), BlobError>>();
-        tx.try_send((blob, Some(tx_notify)))?;
-        match rx_notify.await? {
-            Some(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) => {
-                // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
-                Ok(())
-            }
-            None => Err(BlobError::SendOneshot(block_root)),
+        let (tx_notify, rx_notify) = oneshot::channel::<Result<(), BlobError<T::EthSpec>>>();
+        let res = tx.try_send((blob, Some(tx_notify)));
+        if let Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob)) = rx_notify.await? {
+            // todo(emhane): https://github.com/ethereum/consensus-specs/issues/3261
+            return Err(BlobError::BlobAlreadyExistsAtIndex(naughty_blob));
         }
         Ok(blob.into())
     }
@@ -855,7 +853,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         let verification_result = self
             .chain
             .clone()
-            .verify_block_for_gossip(block.clone())
+            .verify_block_for_gossip(block.block_cloned())
             .await;
 
         let block_root = if let Ok(verified_block) = &verification_result {
@@ -908,9 +906,6 @@ impl<T: BeaconChainTypes> Worker<T> {
                 }
 
                 verified_block
-            }
-            Err(BlockError::DataAvailabilityFailure(bloc, blobs, e)) => {
-                // todo(emhane): deal with failure
             }
             Err(BlockError::ParentUnknown(block)) => {
                 let block = block.0;
@@ -991,6 +986,10 @@ impl<T: BeaconChainTypes> Worker<T> {
                 );
                 return None;
             }
+            Err(BlockError::DataAvailability(_)) | Err(BlockError::BlockMovedToAvailabilityPendingCache) => {
+                // doesn't happen at this point in processing
+                return None;
+            }
         };
 
         metrics::inc_counter(&metrics::BEACON_PROCESSOR_GOSSIP_BLOCK_VERIFIED_TOTAL);
@@ -1039,10 +1038,24 @@ impl<T: BeaconChainTypes> Worker<T> {
 
                 metrics::inc_counter(&metrics::BEACON_PROCESSOR_GOSSIP_BLOCK_REQUEUED_TOTAL);
 
+                let GossipVerifiedBlock {
+                    block,
+                    block_root,
+                    parent,
+                    consensus_context,
+                } = verified_block;
+                let queue_block: GossipVerifiedBlock<T, SomeAvailabilityBlock<T::EthSpec>> =
+                    GossipVerifiedBlock {
+                        block: block.into(),
+                        block_root,
+                        parent,
+                        consensus_context,
+                    };
+
                 if reprocess_tx
                     .try_send(ReprocessQueueMessage::EarlyBlock(QueuedGossipBlock {
                         peer_id,
-                        block: Box::new(verified_block),
+                        block: Box::new(queue_block),
                         seen_timestamp: seen_duration,
                     }))
                     .is_err()
@@ -1075,10 +1088,10 @@ impl<T: BeaconChainTypes> Worker<T> {
     /// Process the beacon block that has already passed gossip verification.
     ///
     /// Raises a log if there are errors.
-    pub async fn process_gossip_verified_block<B: TryIntoAvailableBlock<T>>(
+    pub async fn process_gossip_verified_block(
         self,
         peer_id: PeerId,
-        verified_block: GossipVerifiedBlock<T, B>,
+        verified_block: GossipVerifiedBlock<T, Arc<SignedBeaconBlock<T::EthSpec>>>, // todo(emhane): possibly trasitioning block to an availability pending block before process_block makes more sense
         reprocess_tx: mpsc::Sender<ReprocessQueueMessage<T>>,
         // This value is not used presently, but it might come in handy for debugging.
         _seen_duration: Duration,
@@ -1599,7 +1612,7 @@ impl<T: BeaconChainTypes> Worker<T> {
         };
     }
 
-    pub fn process_gossip_optimistic_update<B: TryIntoAvailableBlock<T>>(
+    pub fn process_gossip_optimistic_update(
         self,
         message_id: MessageId,
         peer_id: PeerId,

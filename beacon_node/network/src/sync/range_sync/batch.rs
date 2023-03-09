@@ -1,12 +1,12 @@
 use crate::sync::manager::Id;
-use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
+use beacon_chain::blob_verification::SomeAvailabilityBlock;
 use lighthouse_network::rpc::methods::BlocksByRangeRequest;
 use lighthouse_network::PeerId;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::ops::Sub;
 use strum::Display;
-use types::{Epoch, EthSpec, Slot};
+use types::{AsSignedBlock, Epoch, EthSpec, Slot};
 
 /// The number of times to retry a batch before it is considered failed.
 const MAX_BATCH_DOWNLOAD_ATTEMPTS: u8 = 5;

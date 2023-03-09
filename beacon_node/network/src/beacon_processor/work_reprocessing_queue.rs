@@ -13,7 +13,7 @@
 use super::MAX_SCHEDULED_WORK_QUEUE_LEN;
 use crate::metrics;
 use crate::sync::manager::BlockProcessType;
-use beacon_chain::blob_verification::{AsSignedBlock, SomeAvailabilityBlock};
+use beacon_chain::blob_verification::SomeAvailabilityBlock;
 use beacon_chain::{BeaconChainTypes, GossipVerifiedBlock, MAXIMUM_GOSSIP_CLOCK_DISPARITY};
 use fnv::FnvHashMap;
 use futures::task::Poll;
@@ -31,7 +31,8 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::error::Error as TimeError;
 use tokio_util::time::delay_queue::{DelayQueue, Key as DelayKey};
 use types::{
-    Attestation, EthSpec, Hash256, LightClientOptimisticUpdate, SignedAggregateAndProof, SubnetId,
+    AsSignedBlock, Attestation, EthSpec, Hash256, LightClientOptimisticUpdate,
+    SignedAggregateAndProof, SubnetId,
 };
 
 const TASK_NAME: &str = "beacon_processor_reprocess_queue";

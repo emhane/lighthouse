@@ -66,8 +66,8 @@ use tokio::sync::mpsc;
 use types::{
     Attestation, AttesterSlashing, Hash256, LightClientFinalityUpdate, LightClientOptimisticUpdate,
     ProposerSlashing, SignedAggregateAndProof, SignedBeaconBlock, SignedBeaconBlockAndBlobsSidecar,
-    SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit, SubnetId,
-    SyncCommitteeMessage, SyncSubnetId,
+    SignedBlobSidecar, SignedBlsToExecutionChange, SignedContributionAndProof, SignedVoluntaryExit,
+    SubnetId, SyncCommitteeMessage, SyncSubnetId,
 };
 use work_reprocessing_queue::{
     spawn_reprocess_scheduler, QueuedAggregate, QueuedLightClientUpdate, QueuedRpcBlock,
@@ -444,20 +444,20 @@ impl<T: BeaconChainTypes> WorkEvent<T> {
     }
 
     /// Create a new `Work` event for some blobs sidecar.
-    pub fn gossip_block_and_blobs_sidecar(
+    pub fn gossip_blob_sidecar(
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        block_and_blobs: SignedBeaconBlockAndBlobsSidecar<T::EthSpec>,
+        blob_sidecar: SignedBlobSidecar<T::EthSpec>,
         seen_timestamp: Duration,
     ) -> Self {
         Self {
             drop_during_sync: false,
-            work: Work::GossipBlockAndBlobsSidecar {
+            work: Work::GossipBlobSidecar {
                 message_id,
                 peer_id,
                 peer_client,
-                block_and_blobs,
+                blob_sidecar,
                 seen_timestamp,
             },
         }
@@ -857,11 +857,11 @@ pub enum Work<T: BeaconChainTypes> {
         block: Arc<SignedBeaconBlock<T::EthSpec>>,
         seen_timestamp: Duration,
     },
-    GossipBlockAndBlobsSidecar {
+    GossipBlobSidecar {
         message_id: MessageId,
         peer_id: PeerId,
         peer_client: Client,
-        block_and_blobs: SignedBeaconBlockAndBlobsSidecar<T::EthSpec>,
+        blob_sidecar: Arc<SignedBlobSidecar<T::EthSpec>>,
         seen_timestamp: Duration,
     },
     DelayedImportBlock {
@@ -965,7 +965,7 @@ impl<T: BeaconChainTypes> Work<T> {
             Work::GossipAggregate { .. } => GOSSIP_AGGREGATE,
             Work::GossipAggregateBatch { .. } => GOSSIP_AGGREGATE_BATCH,
             Work::GossipBlock { .. } => GOSSIP_BLOCK,
-            Work::GossipBlockAndBlobsSidecar { .. } => GOSSIP_BLOCK_AND_BLOBS_SIDECAR,
+            Work::GossipBlobSidecar { .. } => GOSSIP_BLOCK_AND_BLOBS_SIDECAR,
             Work::DelayedImportBlock { .. } => DELAYED_IMPORT_BLOCK,
             Work::GossipVoluntaryExit { .. } => GOSSIP_VOLUNTARY_EXIT,
             Work::GossipProposerSlashing { .. } => GOSSIP_PROPOSER_SLASHING,
@@ -1459,7 +1459,7 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
                             Work::GossipBlock { .. } => {
                                 gossip_block_queue.push(work, work_id, &self.log)
                             }
-                            Work::GossipBlockAndBlobsSidecar { .. } => {
+                            Work::GossipBlobSidecar { .. } => {
                                 gossip_block_and_blobs_sidecar_queue.push(work, work_id, &self.log)
                             }
                             Work::DelayedImportBlock { .. } => {
@@ -1732,7 +1732,7 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
                         message_id,
                         peer_id,
                         peer_client,
-                        block.into(),
+                        block,
                         work_reprocessing_tx,
                         duplicate_cache,
                         seen_timestamp,
@@ -1742,19 +1742,19 @@ impl<T: BeaconChainTypes> BeaconProcessor<T> {
             /*
              * Verification for blobs sidecars received on gossip.
              */
-            Work::GossipBlockAndBlobsSidecar {
+            Work::GossipBlobSidecar {
                 message_id,
                 peer_id,
                 peer_client,
-                block_and_blobs: block_sidecar_pair,
+                blob_sidecar,
                 seen_timestamp,
             } => task_spawner.spawn_async(async move {
                 worker
-                    .process_gossip_block(
+                    .process_gossip_blob(
                         message_id,
                         peer_id,
                         peer_client,
-                        block_sidecar_pair.into(),
+                        blob_sidecar,
                         work_reprocessing_tx,
                         duplicate_cache,
                         seen_timestamp,

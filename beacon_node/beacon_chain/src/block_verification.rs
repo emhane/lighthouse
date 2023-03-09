@@ -290,8 +290,6 @@ pub enum BlockError<T: EthSpec> {
     /// The peer sent us an invalid block, but I'm not really sure how to score this in an
     /// "optimistic" sync world.
     ParentExecutionPayloadInvalid { parent_root: Hash256 },
-    /// Block is aready an [`ExecutedBlock`].
-    BlockIsExecutedBlock,
     /// Blob validation failed.
     BlobValidation(BlobError<T>),
     /// Making a block available failed. The [`DataAvailabilityFailure`] error contains the block
@@ -640,7 +638,6 @@ pub struct GossipVerifiedBlock<T: BeaconChainTypes, B: TryIntoAvailableBlock<T>>
     parent: Option<PreProcessingSnapshot<T::EthSpec>>,
     consensus_context: ConsensusContext<T::EthSpec>,
 }
-
 impl_as_signed_block!(T::EthSpec, T: BeaconChainTypes, B: TryIntoAvailableBlock<T,>,, GossipVerifiedBlock<T, B>, B, .block);
 
 impl<T: BeaconChainTypes> IntoWrappedAvailabilityPendingBlock<T>
